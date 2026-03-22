@@ -1,0 +1,31 @@
+services:
+  black-hole:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: black-hole-adobe
+    ports:
+      - "3000:3000"
+    volumes:
+      - blackhole-data:/app/data
+      - blackhole-uploads:/app/data/uploads
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DATABASE_PATH=/app/data/blackhole.db
+      - UPLOAD_DIR=/app/data/uploads
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - SESSION_SECRET=${SESSION_SECRET:-change-me-in-production}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  blackhole-data:
+    driver: local
+  blackhole-uploads:
+    driver: local
