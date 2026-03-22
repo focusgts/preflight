@@ -314,7 +314,7 @@ export class FileConnector extends BaseConnector {
     }
 
     if (format === 'xml') {
-      schema.rootElement = this.detectXMLRootElement(content);
+      schema.rootElement = this.detectXMLRootElement(content) ?? undefined;
     }
 
     return schema;
