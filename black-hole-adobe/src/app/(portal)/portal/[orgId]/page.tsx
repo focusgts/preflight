@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { useParams } from 'next/navigation';
+import Link from 'next/link';
 import {
   CheckCircle,
   Circle,
@@ -15,6 +16,7 @@ import {
   BookOpen,
   Zap,
   ChevronRight,
+  Radio,
 } from 'lucide-react';
 
 // ── Types ──────────────────────────────────────────────────
@@ -196,26 +198,7 @@ export default function CustomerPortalPage() {
   const [activeTab, setActiveTab] = useState<'progress' | 'savings' | 'knowledge'>('progress');
 
   return (
-    <div className="min-h-screen bg-slate-950">
-      {/* Header */}
-      <header className="border-b border-slate-800 bg-slate-950/80 backdrop-blur-md">
-        <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-6">
-          <div className="flex items-center gap-3">
-            <div className="relative flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-cyan-400">
-              <div className="h-3 w-3 rounded-full bg-slate-950" />
-              <div className="absolute inset-0 rounded-lg bg-gradient-to-br from-violet-500 to-cyan-400 opacity-30 blur-md" />
-            </div>
-            <span className="text-lg font-bold text-white">Black Hole</span>
-          </div>
-          <div className="flex items-center gap-2 text-sm text-slate-400">
-            <Shield className="h-4 w-4 text-emerald-400" />
-            <span>Secure Migration Portal</span>
-          </div>
-        </div>
-      </header>
-
-      {/* Main Content */}
-      <main className="mx-auto max-w-5xl px-6 py-8">
+    <div>
         {/* Org Header */}
         <motion.div
           initial={{ opacity: 0, y: -8 }}
@@ -231,6 +214,23 @@ export default function CustomerPortalPage() {
             <span className="text-slate-500">Started {data.startedAt}</span>
             <span className="text-slate-500">Est. completion {data.estimatedCompletion}</span>
           </div>
+        </motion.div>
+
+        {/* Live Dashboard Link */}
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.05 }}
+          className="mt-4"
+        >
+          <Link
+            href={`/portal/${orgId}/migration/demo-migration-001`}
+            className="inline-flex items-center gap-2 rounded-lg border border-violet-500/30 bg-violet-500/10 px-4 py-2 text-sm font-medium text-violet-300 transition-all hover:bg-violet-500/20 hover:border-violet-500/50 hover:text-white"
+          >
+            <Radio className="h-4 w-4" />
+            View Live Migration Dashboard
+            <ArrowRight className="h-4 w-4" />
+          </Link>
         </motion.div>
 
         {/* Overall Progress */}
@@ -345,12 +345,6 @@ export default function CustomerPortalPage() {
           )}
         </motion.div>
 
-        {/* Footer */}
-        <div className="mt-12 border-t border-slate-800 pt-6 text-center text-xs text-slate-500">
-          <p>Powered by Black Hole Migration Platform</p>
-          <p className="mt-1">Questions? Contact your migration team or email support@blackhole.io</p>
-        </div>
-      </main>
     </div>
   );
 }

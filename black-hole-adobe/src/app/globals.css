@@ -47,6 +47,16 @@ body {
   100% { transform: translateX(100%); }
 }
 
+@keyframes gradient-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.animate-gradient-shimmer {
+  animation: gradient-shimmer 2s ease-in-out infinite;
+  background-size: 200% 100%;
+}
+
 @keyframes glow-pulse {
   0%, 100% { opacity: 0.4; }
   50% { opacity: 0.8; }
