@@ -20,6 +20,7 @@ const PUBLIC_PATHS = [
   '/api/health',
   '/api/calculator',
   '/api/leads',
+  '/api/scanner',
   '/portal',
   '/calculator',
   '/score',
@@ -28,7 +29,7 @@ const PUBLIC_PATHS = [
 
 function isPublicPath(pathname: string): boolean {
   return PUBLIC_PATHS.some(
-    (p) => pathname === p || pathname.startsWith(p + '/'),
+    (p) => p === '/' ? pathname === '/' : (pathname === p || pathname.startsWith(p + '/')),
   );
 }
 
