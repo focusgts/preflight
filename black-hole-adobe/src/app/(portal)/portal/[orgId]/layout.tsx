@@ -9,8 +9,10 @@
 
 import { useParams, usePathname } from 'next/navigation';
 import Link from 'next/link';
+import Image from 'next/image';
 import { motion } from 'framer-motion';
 import { ArrowLeft, Shield } from 'lucide-react';
+import { BRAND_LOGOS, BRAND_COPY } from '@/config/brand';
 
 // ── Org Name Lookup ────────────────────────────────────────
 
@@ -56,11 +58,14 @@ export default function PortalLayout({
 
             {/* Logo */}
             <Link href={portalBase} className="flex items-center gap-3">
-              <div className="relative flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-cyan-400">
-                <div className="h-3 w-3 rounded-full bg-slate-950" />
-                <div className="absolute inset-0 rounded-lg bg-gradient-to-br from-violet-500 to-cyan-400 opacity-30 blur-md" />
-              </div>
-              <span className="text-lg font-bold text-white">Black Hole</span>
+              <Image
+                src={BRAND_LOGOS.navLogo}
+                alt="Focus GTS"
+                width={36}
+                height={36}
+                className="rounded-lg"
+              />
+              <span className="text-lg font-bold text-white">{BRAND_COPY.productName}</span>
             </Link>
 
             {/* Org Name */}
@@ -90,11 +95,11 @@ export default function PortalLayout({
 
       {/* Footer */}
       <footer className="border-t border-slate-800 py-6 text-center text-xs text-slate-500">
-        <p>Powered by Black Hole Migration Platform</p>
+        <p>Powered by {BRAND_COPY.productName} | {BRAND_COPY.companyName}</p>
         <p className="mt-1">
           Questions? Contact your migration team or email{' '}
-          <a href="mailto:support@blackhole.io" className="text-violet-400 hover:text-violet-300">
-            support@blackhole.io
+          <a href={`mailto:${BRAND_COPY.supportEmail}`} className="text-[#CB8CFF] hover:text-[#9966F0]">
+            {BRAND_COPY.supportEmail}
           </a>
         </p>
       </footer>

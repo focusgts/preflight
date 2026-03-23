@@ -14,7 +14,9 @@ import {
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
+import Image from 'next/image';
 import { cn } from '@/lib/utils/cn';
+import { BRAND_LOGOS } from '@/config/brand';
 
 const navItems = [
   { href: '/overview', label: 'Dashboard', icon: LayoutDashboard },
@@ -37,10 +39,13 @@ export function Sidebar() {
     >
       {/* Logo */}
       <div className="flex h-16 items-center gap-3 border-b border-slate-800 px-4">
-        <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-cyan-400">
-          <div className="h-3 w-3 rounded-full bg-slate-950" />
-          <div className="absolute inset-0 rounded-lg bg-gradient-to-br from-violet-500 to-cyan-400 opacity-40 blur-md" />
-        </div>
+        <Image
+          src={BRAND_LOGOS.navLogo}
+          alt="Focus GTS"
+          width={36}
+          height={36}
+          className="shrink-0 rounded-lg"
+        />
         <AnimatePresence>
           {!collapsed && (
             <motion.div
@@ -93,7 +98,7 @@ export function Sidebar() {
                 )}
               </AnimatePresence>
               {isActive && (
-                <div className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r-full bg-gradient-to-b from-violet-500 to-cyan-400" />
+                <div className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r-full bg-gradient-to-b from-[#7647DD] to-[#CB8CFF]" />
               )}
             </Link>
           );
