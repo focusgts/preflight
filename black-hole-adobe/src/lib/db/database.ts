@@ -206,6 +206,16 @@ export class DatabaseWrapper {
     return this.db.transaction(fn)();
   }
 
+  /** Execute raw SQL (DDL / multi-statement). */
+  exec(sql: string): void {
+    this.db.exec(sql);
+  }
+
+  /** Prepare a single SQL statement for parameterized execution. */
+  prepare(sql: string): BetterSqlite3.Statement {
+    return this.db.prepare(sql);
+  }
+
   // =====================================================================
   // CRUD: Migrations
   // =====================================================================
