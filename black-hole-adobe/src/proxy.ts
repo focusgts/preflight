@@ -13,11 +13,17 @@ import type { NextRequest } from 'next/server';
  * Static assets (_next/static, favicon, etc.) are excluded via the matcher.
  */
 const PUBLIC_PATHS = [
+  '/',
   '/login',
   '/api/auth/login',
   '/api/auth/logout',
   '/api/health',
+  '/api/calculator',
+  '/api/leads',
   '/portal',
+  '/calculator',
+  '/score',
+  '/assessment',
 ];
 
 function isPublicPath(pathname: string): boolean {
