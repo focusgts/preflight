@@ -50,38 +50,47 @@ describe('SiteScanner', () => {
     scanner = new SiteScanner();
   });
 
-  // -- AEM Version Detection --
+  // -- AEM Signal Detection (Tier 2 page analysis) --
 
-  describe('detectAEMVersion', () => {
-    it('should detect AEM version from generator meta tag', () => {
-      const html = '<meta name="generator" content="Adobe Experience Manager 6.5.12">';
-      const version = scanner.detectAEMVersion({}, html);
-      expect(version).toBe('6.5.12');
+  describe('analyzePageSignals', () => {
+    it('should detect AEM generator meta tag as a signal', () => {
+      const raw = makeRawScan({
+        html: '<meta name="generator" content="Adobe Experience Manager 6.5">',
+      });
+      const signals = scanner.analyzePageSignals(raw);
+      expect(signals.some((s) => s.name === 'generator-meta')).toBe(true);
     });
 
-    it('should detect AEM Cloud Service from header indicators', () => {
-      const headers = { 'x-aem-host': 'publish-p12345-e67890.adobeaemcloud.com' };
-      const html = '<html><head></head><body>skyline content</body></html>';
-      const version = scanner.detectAEMVersion(headers, html);
-      expect(version).toBe('Cloud Service');
+    it('should detect x-aem-host header as a signal', () => {
+      const raw = makeRawScan({
+        headers: { 'x-aem-host': 'publish-p12345-e67890.adobeaemcloud.com' },
+      });
+      const signals = scanner.analyzePageSignals(raw);
+      expect(signals.some((s) => s.name === 'x-aem-host-header')).toBe(true);
     });
 
-    it('should detect AEM 6.5 from coral3 patterns', () => {
-      const html = '<html><body><div class="coral3-Shell">/crx/de</div></body></html>';
-      const version = scanner.detectAEMVersion({}, html);
-      expect(version).toBe('6.5');
+    it('should detect clientlibs path as a signal', () => {
+      const raw = makeRawScan({
+        html: '<link href="/etc.clientlibs/mysite/clientlib.css">',
+      });
+      const signals = scanner.analyzePageSignals(raw);
+      expect(signals.some((s) => s.name === 'clientlibs-path')).toBe(true);
     });
 
-    it('should detect AEM 6.4 from coral-2 patterns', () => {
-      const html = '<html><body><div class="coralui2">/crx/content</div></body></html>';
-      const version = scanner.detectAEMVersion({}, html);
-      expect(version).toBe('6.4');
+    it('should detect HTL/Sightly templates as a signal', () => {
+      const raw = makeRawScan({
+        html: '<div data-sly-test="${true}">Content</div>',
+      });
+      const signals = scanner.analyzePageSignals(raw);
+      expect(signals.some((s) => s.name === 'htl-sightly')).toBe(true);
     });
 
-    it('should return 6.x when clientlibs detected but no specific version', () => {
-      const html = '<html><body><link href="/etc.clientlibs/mysite/clientlib.css"></body></html>';
-      const version = scanner.detectAEMVersion({}, html);
-      expect(version).toBe('6.x');
+    it('should detect CQ-prefixed attributes as a signal', () => {
+      const raw = makeRawScan({
+        html: '<div cq-component="test">Content</div>',
+      });
+      const signals = scanner.analyzePageSignals(raw);
+      expect(signals.some((s) => s.name === 'cq-attributes')).toBe(true);
     });
   });
 
@@ -109,12 +118,13 @@ describe('SiteScanner', () => {
       expect(platform.indicators.length).toBeGreaterThanOrEqual(2);
     });
 
-    it('should detect AEM from HTL/Sightly templates', () => {
+    it('should detect AEM from HTL/Sightly templates with supporting signals', () => {
       const raw = makeRawScan({
-        html: '<html><body><div data-sly-test="${true}">Content</div></body></html>',
+        html: '<html><body><div data-sly-test="${true}">Content</div><img src="/content/dam/img.jpg"></body></html>',
         headers: { 'x-vhost': 'publish' },
       });
       const platform = scanner.detectPlatform(raw);
+      // data-sly(9) + dam(8) + x-vhost(4) = 21 >= 15
       expect(platform.detected).toBe(true);
     });
 

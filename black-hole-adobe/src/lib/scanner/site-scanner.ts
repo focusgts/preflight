@@ -1,8 +1,9 @@
 /**
- * Public Site Scanner Engine
+ * Public Site Scanner Engine — 5-Tier Multi-Signal Detection
  *
- * Crawls a public-facing URL to detect AEM version, check performance,
- * SEO, security headers, and accessibility. No credentials needed.
+ * Implements ADR-030: DNS resolution, page analysis, safe path probes,
+ * version inference, and deployment classification. Every claim includes
+ * a confidence score. If confidence < 60%, we report "Unknown."
  */
 
 import type {
@@ -12,44 +13,164 @@ import type {
   RawScanData,
 } from '@/types/scanner';
 import { ScoreCalculator } from './score-calculator';
+import { resolveCNAME, type DNSResult } from './dns-resolver';
+import { probeAEMPaths, type ProbeResult } from './path-prober';
+import {
+  inferVersion,
+  classifyDeployment,
+  type DetectedSignal,
+  type VersionResult,
+  type DeploymentResult,
+} from './version-detector';
 
 // ============================================================
-// AEM Detection Patterns
+// Constants
 // ============================================================
 
-const AEM_HEADER_PATTERNS = [
-  { header: 'x-aem-host', weight: 10 },
-  { header: 'x-aem-cluster', weight: 10 },
-  { header: 'x-dispatcher', weight: 6 },
-  { header: 'x-vhost', weight: 4 },
+const PAGE_TIMEOUT_MS = 15000;
+const USER_AGENT = 'BlackHole-Scanner/1.0 (AEM Health Check; focusgts.com)';
+const AEM_DETECTION_THRESHOLD = 15;
+const MIN_DISPLAY_CONFIDENCE = 60;
+
+// ============================================================
+// Tier 2: Header Patterns
+// ============================================================
+
+const AEM_HEADER_PATTERNS: Array<{
+  header: string;
+  weight: number;
+  signalName: string;
+}> = [
+  { header: 'x-aem-host', weight: 10, signalName: 'x-aem-host-header' },
+  { header: 'x-aem-cluster', weight: 10, signalName: 'x-aem-cluster-header' },
+  { header: 'x-dispatcher', weight: 8, signalName: 'dispatcher-header' },
+  { header: 'x-served-by', weight: 6, signalName: 'x-served-by-header' },
+  { header: 'x-vhost', weight: 4, signalName: 'x-vhost-header' },
 ];
 
-const AEM_HTML_PATTERNS: { pattern: RegExp; label: string; weight: number }[] = [
-  { pattern: /\/etc\.clientlibs\//i, label: 'AEM clientlibs path', weight: 9 },
-  { pattern: /\/content\/dam\//i, label: 'AEM DAM path', weight: 8 },
-  { pattern: /\/libs\/granite\//i, label: 'Granite UI libs', weight: 9 },
-  { pattern: /\/etc\/designs\//i, label: 'AEM designs path', weight: 7 },
-  { pattern: /cq-[\w-]+/i, label: 'CQ- prefixed attribute', weight: 6 },
-  { pattern: /data-sly-/i, label: 'HTL/Sightly template', weight: 9 },
-  { pattern: /\/content\/experience-fragments\//i, label: 'Experience Fragments', weight: 8 },
-  { pattern: /<meta[^>]*generator[^>]*adobe\s*experience\s*manager/i, label: 'AEM generator meta', weight: 10 },
-  { pattern: /<meta[^>]*generator[^>]*aem/i, label: 'AEM generator meta (short)', weight: 10 },
-  { pattern: /wcmmode/i, label: 'WCM mode reference', weight: 5 },
+// ============================================================
+// Tier 2: HTML Patterns
+// ============================================================
+
+const AEM_HTML_PATTERNS: Array<{
+  pattern: RegExp;
+  label: string;
+  weight: number;
+  signalName: string;
+}> = [
+  {
+    pattern: /class\s*=\s*["'][^"']*parbase[^"']*["']/i,
+    label: 'AEM paragraph system (parbase)',
+    weight: 9,
+    signalName: 'parbase-class',
+  },
+  {
+    pattern: /class\s*=\s*["'][^"']*aem-Grid[^"']*["']/i,
+    label: 'AEM responsive grid',
+    weight: 9,
+    signalName: 'aem-grid-class',
+  },
+  {
+    pattern: /data-sly-/i,
+    label: 'HTL/Sightly template attributes',
+    weight: 9,
+    signalName: 'htl-sightly',
+  },
+  {
+    pattern: /class\s*=\s*["'][^"']*cmp-[^"']*["']/i,
+    label: 'AEM Core Components',
+    weight: 8,
+    signalName: 'core-components',
+  },
+  {
+    pattern: /\/etc\.clientlibs\//i,
+    label: 'AEM clientlibs proxy path',
+    weight: 9,
+    signalName: 'clientlibs-path',
+  },
+  {
+    pattern: /\/content\/dam\//i,
+    label: 'AEM DAM asset path',
+    weight: 8,
+    signalName: 'dam-path',
+  },
+  {
+    pattern: /<!--\s*\/?\*\s*CQ\b/i,
+    label: 'CQ/AEM HTML comments',
+    weight: 10,
+    signalName: 'cq-comments',
+  },
+  {
+    pattern: /\/etc\/designs\//i,
+    label: 'AEM designs path',
+    weight: 7,
+    signalName: 'designs-path',
+  },
+  {
+    pattern: /\/libs\/granite\//i,
+    label: 'Granite UI framework',
+    weight: 9,
+    signalName: 'granite-libs',
+  },
+  {
+    pattern: /wcmmode/i,
+    label: 'WCM mode reference',
+    weight: 5,
+    signalName: 'wcmmode',
+  },
+  {
+    pattern: /<meta[^>]*generator[^>]*(?:adobe\s*experience\s*manager|aem)/i,
+    label: 'AEM generator meta tag',
+    weight: 10,
+    signalName: 'generator-meta',
+  },
+  {
+    pattern: /cq-[\w-]+/i,
+    label: 'CQ-prefixed attributes',
+    weight: 6,
+    signalName: 'cq-attributes',
+  },
 ];
 
-const AEM_CLOUD_INDICATORS = [
-  'skyline',
-  'aemcs',
-  'cloud-service',
-  'author-p',
-  'publish-p',
-];
+// ============================================================
+// Additional signal patterns for version detection
+// ============================================================
 
-const AEM_6X_INDICATORS = [
-  '/crx/',
-  '/system/console',
-  'cq-msm',
-  'cq-wcm',
+const VERSION_SIGNAL_PATTERNS: Array<{
+  pattern: RegExp;
+  signalName: string;
+  category: DetectedSignal['category'];
+  weight: number;
+  value: string;
+}> = [
+  {
+    pattern: /\.jsp['"?\s>]/i,
+    signalName: 'jsp-references',
+    category: 'html',
+    weight: 5,
+    value: 'JSP file references found',
+  },
+  {
+    pattern: /jquery[/-]3\.\d/i,
+    signalName: 'jquery-3.x',
+    category: 'html',
+    weight: 3,
+    value: 'jQuery 3.x detected',
+  },
+  {
+    pattern: /jquery[/-]1\.\d/i,
+    signalName: 'jquery-1.x',
+    category: 'html',
+    weight: 3,
+    value: 'jQuery 1.x detected',
+  },
+  {
+    pattern: /(?:aem\.js|lib-franklin\.js)/i,
+    signalName: 'edge-delivery-scripts',
+    category: 'html',
+    weight: 10,
+    value: 'Edge Delivery Services scripts',
+  },
 ];
 
 // ============================================================
@@ -58,15 +179,51 @@ const AEM_6X_INDICATORS = [
 
 export class SiteScanner {
   private calculator = new ScoreCalculator();
-  private timeout = 15000;
+  private timeout = PAGE_TIMEOUT_MS;
 
   /**
-   * Full scan of a public URL.
+   * Full 5-tier scan of a public URL.
    */
   async scan(url: string, industry?: string): Promise<ScanResult> {
     const normalizedUrl = this.normalizeUrl(url);
-    const raw = await this.fetchPage(normalizedUrl);
-    const platform = this.detectPlatform(raw);
+    const domain = this.extractDomain(normalizedUrl);
+
+    // Run Tier 1 (DNS) and Tier 2 (page fetch) in parallel
+    const [dnsResult, raw] = await Promise.all([
+      this.resolveDNS(domain),
+      this.fetchPage(normalizedUrl),
+    ]);
+
+    // Tier 2: Analyze page content
+    const pageSignals = this.analyzePageSignals(raw);
+
+    // Tier 3: Safe path probes (run in parallel)
+    const probeResults = await this.probePaths(normalizedUrl);
+
+    // Combine all signals
+    const allSignals = this.combineSignals(dnsResult, pageSignals, probeResults, raw);
+    const cumulativeWeight = allSignals.reduce((sum, s) => sum + s.weight, 0);
+    const aemDetected = cumulativeWeight >= AEM_DETECTION_THRESHOLD
+      || dnsResult.isAEMCloud
+      || dnsResult.isEdgeDelivery;
+
+    // Tier 4: Version inference
+    const versionResult = this.inferVersion(allSignals);
+
+    // Tier 5: Deployment classification
+    const deploymentResult = this.classifyDeployment(allSignals);
+
+    // Build platform details
+    const platform = this.buildPlatformDetails(
+      aemDetected,
+      versionResult,
+      deploymentResult,
+      allSignals,
+      cumulativeWeight,
+      raw,
+    );
+
+    // Health check scoring (existing logic preserved)
     const performanceFindings = this.checkPerformance(raw);
     const seoFindings = this.checkSEO(raw);
     const securityFindings = this.checkSecurity(raw);
@@ -107,8 +264,6 @@ export class SiteScanner {
     );
     const recommendations = this.calculator.getRecommendations(categories);
 
-    const domain = this.extractDomain(normalizedUrl);
-
     return {
       url: normalizedUrl,
       domain,
@@ -125,106 +280,305 @@ export class SiteScanner {
     };
   }
 
-  /**
-   * Detect if a site runs AEM and which version.
-   */
-  detectPlatform(raw: RawScanData): PlatformDetails {
-    const indicators: string[] = [];
-    let score = 0;
+  // ── Tier 1: DNS Resolution ─────────────────────────────────
 
-    // Check headers
-    for (const { header, weight } of AEM_HEADER_PATTERNS) {
+  async resolveDNS(domain: string): Promise<DNSResult> {
+    return resolveCNAME(domain);
+  }
+
+  // ── Tier 2: Page Analysis ──────────────────────────────────
+
+  /**
+   * Fetch a page and return raw scan data for analysis.
+   */
+  async fetchAndAnalyzePage(url: string): Promise<{
+    raw: RawScanData;
+    signals: DetectedSignal[];
+    cumulativeWeight: number;
+    aemDetected: boolean;
+  }> {
+    const raw = await this.fetchPage(url);
+    const signals = this.analyzePageSignals(raw);
+    const cumulativeWeight = signals.reduce((sum, s) => sum + s.weight, 0);
+    return {
+      raw,
+      signals,
+      cumulativeWeight,
+      aemDetected: cumulativeWeight >= AEM_DETECTION_THRESHOLD,
+    };
+  }
+
+  /**
+   * Extract detection signals from headers and HTML content.
+   */
+  analyzePageSignals(raw: RawScanData): DetectedSignal[] {
+    const signals: DetectedSignal[] = [];
+
+    // Check response headers
+    for (const { header, weight, signalName } of AEM_HEADER_PATTERNS) {
       const key = header.toLowerCase();
       if (raw.headers[key]) {
-        indicators.push(`Header: ${header}=${raw.headers[key]}`);
-        score += weight;
+        signals.push({
+          name: signalName,
+          category: 'header',
+          value: `${header}: ${raw.headers[key]}`,
+          weight,
+        });
+
+        // Special: x-aem-host containing "ams" for managed services
+        if (key === 'x-aem-host' && /ams/i.test(raw.headers[key])) {
+          signals.push({
+            name: 'aem-host-ams',
+            category: 'header',
+            value: raw.headers[key],
+            weight: 5,
+          });
+        }
       }
     }
 
     // Check server header
     const server = raw.headers['server'] ?? '';
-    if (/apache/i.test(server) || /dispatcher/i.test(server)) {
-      indicators.push(`Server: ${server}`);
-      score += 3;
+    if (/apache/i.test(server)) {
+      signals.push({
+        name: 'apache-server',
+        category: 'header',
+        value: `Server: ${server}`,
+        weight: 2,
+      });
+    }
+
+    // Check for AEM-specific cookies
+    const cookies = raw.headers['set-cookie'] ?? '';
+    if (/cq-|login-token/i.test(cookies)) {
+      signals.push({
+        name: 'aem-cookies',
+        category: 'cookie',
+        value: 'AEM-specific cookies detected',
+        weight: 9,
+      });
+    }
+
+    // Check x-served-by for Fastly format
+    const servedBy = raw.headers['x-served-by'] ?? '';
+    if (/cache-/i.test(servedBy)) {
+      signals.push({
+        name: 'fastly-cdn',
+        category: 'cdn',
+        value: `x-served-by: ${servedBy}`,
+        weight: 4,
+      });
     }
 
     // Check HTML patterns
-    for (const { pattern, label, weight } of AEM_HTML_PATTERNS) {
+    for (const { pattern, label, weight, signalName } of AEM_HTML_PATTERNS) {
       if (pattern.test(raw.html)) {
-        indicators.push(label);
-        score += weight;
+        signals.push({
+          name: signalName,
+          category: 'html',
+          value: label,
+          weight,
+        });
       }
     }
 
-    // Check URL patterns
-    if (/\.html$/i.test(raw.finalUrl) && /\/content\//i.test(raw.finalUrl)) {
-      indicators.push('AEM-style URL pattern');
-      score += 5;
+    // Check version-specific HTML patterns
+    for (const { pattern, signalName, category, weight, value } of VERSION_SIGNAL_PATTERNS) {
+      if (pattern.test(raw.html)) {
+        signals.push({ name: signalName, category, value, weight });
+      }
     }
 
-    const detected = score >= 8;
-    const version = detected ? this.detectAEMVersion(raw.headers, raw.html) : null;
-    const deployment = detected ? this.detectDeployment(raw.headers, raw.html) : 'unknown';
+    // URL pattern: /content/*.html
+    if (/\.html$/i.test(raw.finalUrl) && /\/content\//i.test(raw.finalUrl)) {
+      signals.push({
+        name: 'aem-url-pattern',
+        category: 'html',
+        value: 'AEM-style URL pattern (/content/*.html)',
+        weight: 5,
+      });
+    }
+
+    return signals;
+  }
+
+  // ── Tier 3: Safe Path Probes ───────────────────────────────
+
+  async probePaths(baseUrl: string): Promise<ProbeResult[]> {
+    return probeAEMPaths(baseUrl);
+  }
+
+  // ── Tier 4: Version Inference ──────────────────────────────
+
+  inferVersion(signals: DetectedSignal[]): VersionResult {
+    return inferVersion(signals);
+  }
+
+  // ── Tier 5: Deployment Classification ──────────────────────
+
+  classifyDeployment(signals: DetectedSignal[]): DeploymentResult {
+    return classifyDeployment(signals);
+  }
+
+  // ── Combined Platform Detection ────────────────────────────
+
+  detectPlatform(raw: RawScanData): PlatformDetails {
+    const signals = this.analyzePageSignals(raw);
+    const cumulativeWeight = signals.reduce((sum, s) => sum + s.weight, 0);
+    const aemDetected = cumulativeWeight >= AEM_DETECTION_THRESHOLD;
+    const versionResult = this.inferVersion(signals);
+    const deploymentResult = this.classifyDeployment(signals);
+
+    return this.buildPlatformDetails(
+      aemDetected,
+      versionResult,
+      deploymentResult,
+      signals,
+      cumulativeWeight,
+      raw,
+    );
+  }
+
+  // ── Signal Combination ─────────────────────────────────────
+
+  private combineSignals(
+    dns: DNSResult,
+    pageSignals: DetectedSignal[],
+    probes: ProbeResult[],
+    raw: RawScanData,
+  ): DetectedSignal[] {
+    const signals: DetectedSignal[] = [...pageSignals];
+
+    // DNS signals
+    if (dns.isAEMCloud) {
+      signals.push({
+        name: 'aem-cloud-cname',
+        category: 'dns',
+        value: `CNAME → ${dns.cnames.join(', ')}`,
+        weight: 15,
+      });
+    }
+
+    if (dns.isEdgeDelivery) {
+      signals.push({
+        name: 'edge-delivery-cname',
+        category: 'dns',
+        value: `CNAME → ${dns.cnames.join(', ')}`,
+        weight: 15,
+      });
+    }
+
+    if (dns.cdnProvider && !dns.isAEMCloud && !dns.isEdgeDelivery) {
+      const cdnSignalName = `${dns.cdnProvider}-cdn`;
+      // Only add if not already detected from headers
+      if (!signals.some((s) => s.name === cdnSignalName)) {
+        signals.push({
+          name: cdnSignalName,
+          category: 'cdn',
+          value: `CDN: ${dns.cdnProvider} (from DNS)`,
+          weight: 3,
+        });
+      }
+    }
+
+    // Probe signals
+    for (const probe of probes) {
+      if (probe.isAEMIndicator && probe.weight > 0) {
+        signals.push({
+          name: `probe-${probe.path.replace(/\//g, '-').replace(/^-/, '')}`,
+          category: 'probe',
+          value: `${probe.path} returned ${probe.statusCode}`,
+          weight: probe.weight,
+        });
+      }
+    }
+
+    // CDN from headers (CloudFront)
+    const via = raw.headers['via'] ?? '';
+    if (/cloudfront/i.test(via) && !signals.some((s) => s.name === 'cloudfront-cdn')) {
+      signals.push({
+        name: 'cloudfront-cdn',
+        category: 'cdn',
+        value: `Via: ${via}`,
+        weight: 3,
+      });
+    }
+
+    // Akamai from headers
+    const xCache = raw.headers['x-cache'] ?? '';
+    if (/akamai/i.test(xCache) && !signals.some((s) => s.name === 'akamai-cdn')) {
+      signals.push({
+        name: 'akamai-cdn',
+        category: 'cdn',
+        value: `X-Cache: ${xCache}`,
+        weight: 3,
+      });
+    }
+
+    return signals;
+  }
+
+  // ── Platform Details Builder ───────────────────────────────
+
+  private buildPlatformDetails(
+    aemDetected: boolean,
+    versionResult: VersionResult,
+    deploymentResult: DeploymentResult,
+    signals: DetectedSignal[],
+    cumulativeWeight: number,
+    raw: RawScanData,
+  ): PlatformDetails {
+    const detectionConfidence = Math.min(100, cumulativeWeight * 3);
+
+    // Determine if we should show version
+    const showVersion = versionResult.confidence >= MIN_DISPLAY_CONFIDENCE;
+    const showDeployment = deploymentResult.confidence >= MIN_DISPLAY_CONFIDENCE;
+
+    // Map deployment type to PlatformDetails type
+    let deployment: PlatformDetails['deployment'] = 'unknown';
+    if (showDeployment) {
+      if (deploymentResult.type === 'edge-delivery') {
+        deployment = 'cloud-service'; // EDS is part of Cloud Service
+      } else {
+        deployment = deploymentResult.type as PlatformDetails['deployment'];
+      }
+    }
+
+    const indicators = signals
+      .filter((s) => s.weight >= 5)
+      .map((s) => s.value)
+      .slice(0, 15);
+
+    if (!aemDetected) {
+      return {
+        detected: false,
+        platform: this.detectOtherPlatform(raw),
+        version: null,
+        deployment: 'unknown',
+        indicators: [],
+        confidence: detectionConfidence,
+        versionConfidence: 0,
+        deploymentConfidence: 0,
+      };
+    }
 
     return {
-      detected,
-      platform: detected ? 'Adobe Experience Manager' : this.detectOtherPlatform(raw),
-      version,
-      deployment: deployment as PlatformDetails['deployment'],
+      detected: true,
+      platform: 'Adobe Experience Manager',
+      version: showVersion ? versionResult.version : null,
+      deployment,
       indicators,
+      confidence: detectionConfidence,
+      versionConfidence: versionResult.confidence,
+      deploymentConfidence: deploymentResult.confidence,
     };
   }
 
-  /**
-   * Fingerprint AEM version from response headers and HTML.
-   */
-  detectAEMVersion(
-    headers: Record<string, string>,
-    html: string,
-  ): string | null {
-    // Generator meta tag
-    const genMatch = html.match(
-      /<meta[^>]*generator[^>]*content=["']([^"']*aem[^"']*|[^"']*experience\s*manager[^"']*)["']/i,
-    );
-    if (genMatch) {
-      const ver = genMatch[1].match(/(\d+\.\d+[\.\d]*)/);
-      if (ver) return ver[1];
-    }
+  // ── Health Check Methods (preserved from original) ─────────
 
-    // Cloud Service indicators
-    for (const indicator of AEM_CLOUD_INDICATORS) {
-      const headerValues = Object.values(headers).join(' ').toLowerCase();
-      if (headerValues.includes(indicator) || html.toLowerCase().includes(indicator)) {
-        return 'Cloud Service';
-      }
-    }
-
-    // 6.x indicators
-    for (const indicator of AEM_6X_INDICATORS) {
-      if (html.includes(indicator)) {
-        // Try to narrow version
-        if (html.includes('coral3') || html.includes('coral-')) return '6.5';
-        if (html.includes('coral-2') || html.includes('coralui2')) return '6.4';
-        return '6.x';
-      }
-    }
-
-    // clientlibs version hints
-    if (/\/etc\.clientlibs\//.test(html)) {
-      if (/clientlib-grid/.test(html)) return '6.5';
-      return '6.x';
-    }
-
-    return '6.x';
-  }
-
-  /**
-   * Check performance via proxy metrics (TTFB, page size, response time).
-   */
   checkPerformance(raw: RawScanData): ScanFinding[] {
     const findings: ScanFinding[] = [];
 
-    // TTFB / response time
     if (raw.responseTimeMs > 3000) {
       findings.push({
         category: 'Performance',
@@ -251,7 +605,6 @@ export class SiteScanner {
       });
     }
 
-    // Page size
     const sizeKB = raw.contentLengthBytes / 1024;
     if (sizeKB > 3000) {
       findings.push({
@@ -271,7 +624,6 @@ export class SiteScanner {
       });
     }
 
-    // Redirect count
     if (raw.redirectCount > 2) {
       findings.push({
         category: 'Performance',
@@ -282,7 +634,6 @@ export class SiteScanner {
       });
     }
 
-    // Compression check
     const encoding = raw.headers['content-encoding'] ?? '';
     if (!encoding.includes('gzip') && !encoding.includes('br')) {
       findings.push({
@@ -297,14 +648,10 @@ export class SiteScanner {
     return findings;
   }
 
-  /**
-   * Check SEO: meta tags, sitemap, robots.txt, canonical URLs, structured data.
-   */
   checkSEO(raw: RawScanData): ScanFinding[] {
     const findings: ScanFinding[] = [];
     const { html } = raw;
 
-    // Title tag
     const titleMatch = html.match(/<title[^>]*>(.*?)<\/title>/is);
     if (!titleMatch || !titleMatch[1].trim()) {
       findings.push({
@@ -324,7 +671,6 @@ export class SiteScanner {
       });
     }
 
-    // Meta description
     const descMatch = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']*)["']/i);
     if (!descMatch || !descMatch[1].trim()) {
       findings.push({
@@ -336,7 +682,6 @@ export class SiteScanner {
       });
     }
 
-    // Canonical URL
     if (!/<link[^>]*rel=["']canonical["']/i.test(html)) {
       findings.push({
         category: 'SEO',
@@ -347,7 +692,6 @@ export class SiteScanner {
       });
     }
 
-    // Structured data (JSON-LD)
     if (!/<script[^>]*type=["']application\/ld\+json["']/i.test(html)) {
       findings.push({
         category: 'SEO',
@@ -358,7 +702,6 @@ export class SiteScanner {
       });
     }
 
-    // Open Graph tags
     if (!/<meta[^>]*property=["']og:/i.test(html)) {
       findings.push({
         category: 'SEO',
@@ -369,7 +712,6 @@ export class SiteScanner {
       });
     }
 
-    // H1 check
     const h1Matches = html.match(/<h1[\s>]/gi);
     if (!h1Matches) {
       findings.push({
@@ -392,19 +734,16 @@ export class SiteScanner {
     return findings;
   }
 
-  /**
-   * Check security headers (HSTS, CSP, X-Frame-Options, etc.).
-   */
   checkSecurity(raw: RawScanData): ScanFinding[] {
     const findings: ScanFinding[] = [];
     const h = raw.headers;
 
-    const checks: {
+    const checks: Array<{
       header: string;
       severity: ScanFinding['severity'];
       title: string;
       recommendation: string;
-    }[] = [
+    }> = [
       {
         header: 'strict-transport-security',
         severity: 'critical',
@@ -455,7 +794,6 @@ export class SiteScanner {
       }
     }
 
-    // HTTPS check
     if (raw.finalUrl.startsWith('http://')) {
       findings.push({
         category: 'Security',
@@ -469,14 +807,10 @@ export class SiteScanner {
     return findings;
   }
 
-  /**
-   * Basic accessibility checks (alt tags, heading hierarchy, lang attribute).
-   */
   checkAccessibility(raw: RawScanData): ScanFinding[] {
     const findings: ScanFinding[] = [];
     const { html } = raw;
 
-    // Lang attribute
     if (!/<html[^>]*lang=["'][a-z]/i.test(html)) {
       findings.push({
         category: 'Accessibility',
@@ -487,7 +821,6 @@ export class SiteScanner {
       });
     }
 
-    // Images without alt
     const imgTags = html.match(/<img[^>]*>/gi) ?? [];
     const noAlt = imgTags.filter((tag) => !/alt=["']/i.test(tag));
     if (noAlt.length > 0) {
@@ -500,7 +833,6 @@ export class SiteScanner {
       });
     }
 
-    // Heading hierarchy
     const headings = html.match(/<h([1-6])[\s>]/gi) ?? [];
     const levels = headings.map((h) => parseInt(h.match(/\d/)![0], 10));
     for (let i = 1; i < levels.length; i++) {
@@ -516,7 +848,6 @@ export class SiteScanner {
       }
     }
 
-    // Skip navigation
     if (!/<a[^>]*skip/i.test(html) && !/#main/i.test(html)) {
       findings.push({
         category: 'Accessibility',
@@ -527,7 +858,6 @@ export class SiteScanner {
       });
     }
 
-    // Form labels
     const inputs = html.match(/<input[^>]*type=["']text["']/gi) ?? [];
     if (inputs.length > 0) {
       const labels = html.match(/<label/gi) ?? [];
@@ -545,7 +875,7 @@ export class SiteScanner {
     return findings;
   }
 
-  // ── Private Helpers ──────────────────────────────────────
+  // ── Private Helpers ────────────────────────────────────────
 
   private checkMigration(platform: PlatformDetails): ScanFinding[] {
     const findings: ScanFinding[] = [];
@@ -571,7 +901,7 @@ export class SiteScanner {
       });
     }
 
-    if (platform.version && !platform.version.includes('Cloud')) {
+    if (platform.version && !platform.version.includes('Cloud') && !platform.version.includes('Edge')) {
       findings.push({
         category: 'Migration',
         severity: 'high',
@@ -586,23 +916,12 @@ export class SiteScanner {
 
   private migrationReadinessScore(platform: PlatformDetails): number {
     if (platform.version?.includes('Cloud')) return 95;
+    if (platform.version?.includes('Edge')) return 95;
     if (platform.deployment === 'managed-services') return 60;
     if (platform.version === '6.5') return 50;
-    if (platform.version === '6.4') return 35;
+    if (platform.version === '6.4' || platform.version === '6.3-6.4') return 35;
     if (platform.version?.startsWith('6.')) return 25;
     return 40;
-  }
-
-  private detectDeployment(
-    headers: Record<string, string>,
-    html: string,
-  ): string {
-    const all = Object.values(headers).join(' ').toLowerCase() + html.toLowerCase();
-    if (AEM_CLOUD_INDICATORS.some((i) => all.includes(i))) return 'cloud-service';
-    if (/managed/i.test(all) || /ams/i.test(headers['x-aem-host'] ?? '')) {
-      return 'managed-services';
-    }
-    return 'on-prem';
   }
 
   private detectOtherPlatform(raw: RawScanData): string {
@@ -659,7 +978,7 @@ export class SiteScanner {
         signal: controller.signal,
         redirect: 'follow',
         headers: {
-          'User-Agent': 'BlackHole-Scanner/1.0 (AEM Health Check)',
+          'User-Agent': USER_AGENT,
           Accept: 'text/html,application/xhtml+xml',
         },
       });

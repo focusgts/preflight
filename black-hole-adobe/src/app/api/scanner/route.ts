@@ -1,14 +1,14 @@
 /**
  * POST /api/scanner — Start a public site scan
  *
- * Accepts { url: string, industry?: string } and returns a ScanResult.
- * Rate limited to 10 scans per IP per hour.
- * In development: returns realistic mock results seeded by domain hash.
+ * Accepts { url: string, industry?: string } and returns a real ScanResult
+ * using the 5-tier AEM detection methodology (ADR-030).
+ * Rate limited to 10 scans per IP per hour. Results cached for 30 minutes.
  */
 
 import { success, error } from '@/lib/api/response';
-import type { ScanResult, ScanFinding, CategoryScore, Grade } from '@/types/scanner';
-import { ScoreCalculator } from '@/lib/scanner/score-calculator';
+import type { ScanResult } from '@/types/scanner';
+import { SiteScanner } from '@/lib/scanner/site-scanner';
 
 // ── In-memory rate limiter ────────────────────────────────
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
@@ -35,146 +35,6 @@ function getClientIp(request: Request): string {
   const forwarded = request.headers.get('x-forwarded-for');
   if (forwarded) return forwarded.split(',')[0].trim();
   return '127.0.0.1';
-}
-
-// ── Deterministic hash for consistent mock scores ─────────
-function hashDomain(domain: string): number {
-  let hash = 0;
-  for (let i = 0; i < domain.length; i++) {
-    const char = domain.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash |= 0;
-  }
-  return Math.abs(hash);
-}
-
-function seededRandom(seed: number, offset: number): number {
-  const x = Math.sin(seed + offset) * 10000;
-  return x - Math.floor(x);
-}
-
-function scoreToGrade(score: number): Grade {
-  return ScoreCalculator.toGrade(score);
-}
-
-// ── Mock scan result generator ────────────────────────────
-function generateMockResult(url: string, industry?: string): ScanResult {
-  const domain = extractDomain(url);
-  const seed = hashDomain(domain);
-  const calculator = new ScoreCalculator();
-
-  const isAdobeSite = /adobe|aem|experience/i.test(domain);
-  const boost = isAdobeSite ? 20 : 0;
-
-  const perfScore = Math.min(100, Math.round(seededRandom(seed, 1) * 40 + 35 + boost));
-  const seoScore = Math.min(100, Math.round(seededRandom(seed, 2) * 35 + 40 + boost));
-  const secScore = Math.min(100, Math.round(seededRandom(seed, 3) * 40 + 30 + boost));
-  const a11yScore = Math.min(100, Math.round(seededRandom(seed, 4) * 30 + 45 + boost));
-  const migScore = isAdobeSite
-    ? Math.min(100, Math.round(seededRandom(seed, 5) * 25 + 60))
-    : Math.round(seededRandom(seed, 5) * 35 + 30);
-
-  const aemDetected = seededRandom(seed, 6) > 0.3 || isAdobeSite;
-  const versions = ['6.4', '6.5', '6.5', '6.5', 'Cloud Service'];
-  const aemVersion = aemDetected
-    ? versions[Math.floor(seededRandom(seed, 7) * versions.length)]
-    : null;
-
-  function makeFinding(
-    cat: string,
-    sev: ScanFinding['severity'],
-    title: string,
-    desc: string,
-    rec: string,
-  ): ScanFinding {
-    return { category: cat, severity: sev, title, description: desc, recommendation: rec };
-  }
-
-  const perfFindings: ScanFinding[] = [];
-  if (perfScore < 70) {
-    perfFindings.push(makeFinding('Performance', 'high', 'Slow server response', `TTFB estimated at ${Math.round(800 + seededRandom(seed, 10) * 2200)}ms.`, 'Enable CDN and dispatcher caching.'));
-  }
-  if (perfScore < 55) {
-    perfFindings.push(makeFinding('Performance', 'critical', 'Large page size', `Page weight ~${Math.round(1500 + seededRandom(seed, 11) * 3000)}KB.`, 'Optimize images and lazy-load content.'));
-  }
-  perfFindings.push(makeFinding('Performance', 'medium', 'No compression detected', 'Response not compressed.', 'Enable Gzip or Brotli.'));
-
-  const seoFindings: ScanFinding[] = [];
-  if (seoScore < 65) {
-    seoFindings.push(makeFinding('SEO', 'high', 'Missing meta description', 'No meta description tag found.', 'Add unique meta descriptions.'));
-  }
-  seoFindings.push(makeFinding('SEO', 'low', 'No structured data', 'No JSON-LD schema found.', 'Add Schema.org structured data.'));
-  if (seoScore < 50) {
-    seoFindings.push(makeFinding('SEO', 'critical', 'Missing page title', 'No <title> tag detected.', 'Add descriptive page titles.'));
-  }
-
-  const secFindings: ScanFinding[] = [];
-  if (secScore < 60) {
-    secFindings.push(makeFinding('Security', 'critical', 'Missing HSTS header', 'Strict-Transport-Security not set.', 'Add HSTS with max-age 31536000.'));
-  }
-  secFindings.push(makeFinding('Security', 'high', 'Missing CSP header', 'No Content-Security-Policy header.', 'Implement a CSP to prevent XSS.'));
-  if (secScore < 45) {
-    secFindings.push(makeFinding('Security', 'medium', 'Missing X-Frame-Options', 'No clickjacking protection.', 'Add X-Frame-Options: DENY.'));
-  }
-
-  const a11yFindings: ScanFinding[] = [];
-  if (a11yScore < 70) {
-    a11yFindings.push(makeFinding('Accessibility', 'high', 'Images missing alt text', `${Math.round(seededRandom(seed, 20) * 15 + 3)} images lack alt attributes.`, 'Add alt text to all images.'));
-  }
-  a11yFindings.push(makeFinding('Accessibility', 'medium', 'Heading hierarchy gaps', 'Heading levels skip from H2 to H4.', 'Use sequential heading levels.'));
-
-  const migFindings: ScanFinding[] = [];
-  if (aemDetected && aemVersion && !aemVersion.includes('Cloud')) {
-    migFindings.push(makeFinding('Migration', 'high', `Legacy AEM ${aemVersion}`, `Running AEM ${aemVersion} requires migration to Cloud Service.`, 'Run BPA and start migration planning.'));
-    migFindings.push(makeFinding('Migration', 'medium', 'On-premise deployment', 'On-prem deployments need full migration.', 'Consider AEM as a Cloud Service.'));
-  }
-
-  function buildCat(name: string, score: number, weight: number, findings: ScanFinding[]): CategoryScore {
-    return { name, score, weight, grade: scoreToGrade(score), findings };
-  }
-
-  const categories: ScanResult['categories'] = {
-    performance: buildCat('Performance', perfScore, 0.25, perfFindings),
-    seo: buildCat('SEO', seoScore, 0.20, seoFindings),
-    security: buildCat('Security', secScore, 0.20, secFindings),
-    accessibility: buildCat('Accessibility', a11yScore, 0.10, a11yFindings),
-    migration: buildCat('Migration Risk', migScore, 0.25, migFindings),
-  };
-
-  const overallScore = calculator.calculate(categories);
-  const benchmark = calculator.getIndustryBenchmark(overallScore, industry);
-  const urgency = calculator.getMigrationUrgency(aemVersion, overallScore);
-  const allFindings = [
-    ...perfFindings, ...seoFindings, ...secFindings, ...a11yFindings, ...migFindings,
-  ].sort((a, b) => {
-    const order: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
-    return order[a.severity] - order[b.severity];
-  });
-
-  return {
-    url,
-    domain,
-    overallScore,
-    grade: scoreToGrade(overallScore),
-    categories,
-    aemDetected,
-    aemVersion,
-    platformDetails: {
-      detected: aemDetected,
-      platform: aemDetected ? 'Adobe Experience Manager' : 'Unknown',
-      version: aemVersion,
-      deployment: aemDetected
-        ? (aemVersion?.includes('Cloud') ? 'cloud-service' : 'on-prem')
-        : 'unknown',
-      indicators: aemDetected
-        ? ['Header: x-aem-host', 'AEM clientlibs path', 'AEM DAM path']
-        : [],
-    },
-    recommendations: allFindings.slice(0, 10),
-    industryBenchmark: benchmark,
-    migrationUrgency: urgency,
-    scannedAt: new Date().toISOString(),
-  };
 }
 
 function extractDomain(url: string): string {
@@ -226,16 +86,62 @@ export async function POST(request: Request) {
       return success(cached.result);
     }
 
-    // Generate mock result (replace with real SiteScanner in production)
-    const result = generateMockResult(url, industry);
+    // Run real 5-tier scan
+    const scanner = new SiteScanner();
+    const result = await scanner.scan(url, industry);
 
     // Cache result
     scanCache.set(domain, { result, cachedAt: Date.now() });
 
-    console.log(`[Scanner] Scanned ${domain} — score: ${result.overallScore}`);
+    console.log(
+      `[Scanner] Scanned ${domain} — score: ${result.overallScore}, ` +
+      `AEM: ${result.aemDetected}, ` +
+      `version: ${result.aemVersion ?? 'N/A'} (${result.platformDetails.versionConfidence ?? 0}%), ` +
+      `deployment: ${result.platformDetails.deployment} (${result.platformDetails.deploymentConfidence ?? 0}%)`,
+    );
+
     return success(result);
-  } catch (err) {
-    console.error('[Scanner] Error:', err);
-    return error('SCAN_FAILED', 'Failed to scan the site. Please try again.', 500);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    console.error('[Scanner] Scan failed:', message);
+
+    // Provide a helpful error message based on the failure type
+    if (message.includes('abort') || message.includes('timeout')) {
+      return error(
+        'SCAN_TIMEOUT',
+        'The site took too long to respond. It may be down or blocking automated requests.',
+        504,
+      );
+    }
+
+    if (message.includes('ENOTFOUND') || message.includes('getaddrinfo')) {
+      return error(
+        'SITE_UNREACHABLE',
+        'Could not resolve the domain. Please check the URL and try again.',
+        502,
+      );
+    }
+
+    if (message.includes('SSL') || message.includes('certificate') || message.includes('CERT')) {
+      return error(
+        'SSL_ERROR',
+        'SSL certificate error when connecting to the site. The site may have an invalid certificate.',
+        502,
+      );
+    }
+
+    if (message.includes('ECONNREFUSED') || message.includes('ECONNRESET')) {
+      return error(
+        'CONNECTION_REFUSED',
+        'The site refused the connection. It may be down or blocking requests.',
+        502,
+      );
+    }
+
+    return error(
+      'SCAN_FAILED',
+      'Failed to scan the site. Please try again later.',
+      500,
+    );
   }
 }

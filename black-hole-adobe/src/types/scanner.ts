@@ -81,8 +81,11 @@ export interface PlatformDetails {
   detected: boolean;
   platform: string;
   version: string | null;
-  deployment: 'cloud-service' | 'managed-services' | 'on-prem' | 'unknown';
+  deployment: 'cloud-service' | 'managed-services' | 'on-prem' | 'edge-delivery' | 'unknown';
   indicators: string[];
+  confidence?: number;
+  versionConfidence?: number;
+  deploymentConfidence?: number;
 }
 
 // ============================================================
@@ -135,4 +138,29 @@ export interface RawScanData {
   contentLengthBytes: number;
   redirectCount: number;
   finalUrl: string;
+}
+
+// ============================================================
+// 5-Tier Scanner Types (ADR-030)
+// ============================================================
+
+export { type DNSResult } from '@/lib/scanner/dns-resolver';
+export { type ProbeResult } from '@/lib/scanner/path-prober';
+export {
+  type DetectedSignal,
+  type VersionResult,
+  type DeploymentResult,
+  type DeploymentType,
+} from '@/lib/scanner/version-detector';
+
+export interface ScanTierResults {
+  dns: import('@/lib/scanner/dns-resolver').DNSResult;
+  pageLoad: {
+    signals: import('@/lib/scanner/version-detector').DetectedSignal[];
+    cumulativeWeight: number;
+    aemDetected: boolean;
+  };
+  probes: import('@/lib/scanner/path-prober').ProbeResult[];
+  version: import('@/lib/scanner/version-detector').VersionResult;
+  deployment: import('@/lib/scanner/version-detector').DeploymentResult;
 }
