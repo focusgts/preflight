@@ -562,14 +562,25 @@ export class SiteScanner {
       };
     }
 
+    // When deployment is definitively Cloud Service, override version
+    // to prevent showing "6.5" for a site that's already on Cloud.
+    // Cloud Service sites may have 6.5-era HTML patterns (clientlibs,
+    // Core Components) that carry over after migration.
+    let version = showVersion ? versionResult.version : null;
+    let versionConf = versionResult.confidence;
+    if (deployment === 'cloud-service' && deploymentResult.confidence >= 70) {
+      version = 'Cloud Service';
+      versionConf = deploymentResult.confidence;
+    }
+
     return {
       detected: true,
       platform: 'Adobe Experience Manager',
-      version: showVersion ? versionResult.version : null,
+      version,
       deployment,
       indicators,
       confidence: detectionConfidence,
-      versionConfidence: versionResult.confidence,
+      versionConfidence: versionConf,
       deploymentConfidence: deploymentResult.confidence,
     };
   }
@@ -915,6 +926,8 @@ export class SiteScanner {
   }
 
   private migrationReadinessScore(platform: PlatformDetails): number {
+    // Cloud Service or Edge Delivery = already migrated, high score
+    if (platform.deployment === 'cloud-service') return 95;
     if (platform.version?.includes('Cloud')) return 95;
     if (platform.version?.includes('Edge')) return 95;
     if (platform.deployment === 'managed-services') return 60;
