@@ -1,6 +1,6 @@
 # ADR-045: Content Sync Page — Real API Wiring
 
-## Status: Proposed
+## Status: Accepted
 
 ## Date: 2026-03-31
 

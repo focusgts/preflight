@@ -29,6 +29,7 @@ import {
 } from '@/types/sync';
 import { ChangeDetector } from './change-detector';
 import { ConflictResolver } from './conflict-resolver';
+import { fetchAemContentItems } from './aem-content-fetcher';
 
 // ============================================================
 // Types
@@ -514,22 +515,36 @@ export class ContentSyncEngine {
 
   /**
    * Fetch content items from the source system.
-   * In production, this would call the source CMS API.
+   *
+   * Calls the AEM QueryBuilder + Sling JSON endpoints to list pages
+   * under the configured basePath. Returns empty array (with a warning)
+   * if the instance is unreachable or credentials are missing, so that
+   * sync degrades gracefully instead of throwing.
    */
   protected async fetchSourceItems(
-    _config: SyncSourceConfig,
+    config: SyncSourceConfig,
   ): Promise<SnapshotItem[]> {
-    // Override in subclass or mock for real connector integration
-    return [];
+    if (!config.url) {
+      console.warn('[ContentSyncEngine] No source URL configured — returning empty items');
+      return [];
+    }
+    return fetchAemContentItems(config.url, config.basePath, config.credentials);
   }
 
   /**
    * Fetch content items from the target system.
+   *
+   * Same approach as fetchSourceItems but against the target AEM instance.
+   * Used during applyChanges to detect conflicts (target-side changes).
    */
   protected async fetchTargetItems(
-    _config: SyncTargetConfig,
+    config: SyncTargetConfig,
   ): Promise<SnapshotItem[]> {
-    return [];
+    if (!config.url) {
+      console.warn('[ContentSyncEngine] No target URL configured — returning empty items');
+      return [];
+    }
+    return fetchAemContentItems(config.url, config.basePath, config.credentials);
   }
 
   /**
