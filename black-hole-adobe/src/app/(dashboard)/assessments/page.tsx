@@ -9,6 +9,7 @@ import { ScoreRing } from '@/components/ui/score-ring';
 import { Badge, StatusBadge } from '@/components/ui/badge';
 import { Tabs, TabPanel } from '@/components/ui/tabs';
 import { ReadinessReport } from '@/components/assessment/readiness-report';
+import { EffortEstimate } from '@/components/assessment/effort-estimate';
 import { MigrationStatus } from '@/types';
 import type { AssessmentResult } from '@/types';
 
@@ -227,6 +228,10 @@ export default function AssessmentsPage() {
 
         {selectedAssessmentData && (
           <ReadinessReport assessment={selectedAssessmentData} />
+        )}
+
+        {selectedAssessmentData?.migrationProjectId && (
+          <EffortEstimate migrationId={selectedAssessmentData.migrationProjectId} />
         )}
       </div>
     );

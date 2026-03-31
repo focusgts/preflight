@@ -10,7 +10,20 @@ import { DataTable, type Column } from '@/components/ui/data-table';
 import { Modal } from '@/components/ui/modal';
 import { MigrationWizard, type MigrationWizardSubmitData } from '@/components/migration/migration-wizard';
 import { ProgressTracker } from '@/components/migration/progress-tracker';
+import { PreFlightReport } from '@/components/migration/preflight-report';
+import { EffortEstimate } from '@/components/assessment/effort-estimate';
 import { MigrationStatus, MigrationType, type MigrationProject, type PaginatedResponse } from '@/types';
+
+/** Statuses that indicate an assessment has been completed for the migration */
+const ASSESSED_STATUSES = new Set<MigrationStatus>([
+  MigrationStatus.ASSESSED,
+  MigrationStatus.PLANNING,
+  MigrationStatus.PLANNED,
+  MigrationStatus.TRANSFORMING,
+  MigrationStatus.EXECUTING,
+  MigrationStatus.VALIDATING,
+  MigrationStatus.COMPLETED,
+]);
 
 const migrationTypeLabels: Record<string, string> = {
   aem_onprem_to_cloud: 'AEM On-Prem to Cloud',
@@ -435,11 +448,19 @@ export default function MigrationsPage() {
           title={selectedMigration.name}
           size="lg"
         >
-          <ProgressTracker
-            phases={selectedMigration.phases}
-            overallProgress={selectedMigration.progress}
-            estimatedTimeRemaining="~2 weeks"
-          />
+          <div className="space-y-6">
+            <ProgressTracker
+              phases={selectedMigration.phases}
+              overallProgress={selectedMigration.progress}
+              estimatedTimeRemaining="~2 weeks"
+            />
+            {ASSESSED_STATUSES.has(selectedMigration.status) && (
+              <EffortEstimate migrationId={selectedMigration.id} />
+            )}
+            {ASSESSED_STATUSES.has(selectedMigration.status) && (
+              <PreFlightReport migrationId={selectedMigration.id} />
+            )}
+          </div>
         </Modal>
       )}
     </div>
