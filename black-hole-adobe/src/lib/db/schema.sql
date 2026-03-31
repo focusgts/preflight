@@ -188,3 +188,43 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+
+-- ============================================================
+-- Drift Baselines (ADR-035)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS drift_baselines (
+  migration_id TEXT PRIMARY KEY,
+  site_url     TEXT NOT NULL,
+  data         TEXT NOT NULL,  -- JSON serialized DriftBaseline
+  captured_at  TEXT NOT NULL
+);
+
+-- ============================================================
+-- Drift Checks (ADR-035)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS drift_checks (
+  id            TEXT PRIMARY KEY,
+  migration_id  TEXT NOT NULL,
+  drift_score   REAL NOT NULL,
+  alert_level   TEXT NOT NULL,
+  data          TEXT NOT NULL,  -- JSON serialized DriftCheck
+  checked_at    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_drift_checks_migration ON drift_checks(migration_id);
+CREATE INDEX IF NOT EXISTS idx_drift_checks_checked_at ON drift_checks(checked_at DESC);
+
+-- ============================================================
+-- Pre-Flight Reports (ADR-036)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS preflight_reports (
+  id            TEXT PRIMARY KEY,
+  migration_id  TEXT NOT NULL,
+  data          TEXT NOT NULL,  -- JSON serialized PreFlightReport
+  created_at    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_preflight_reports_migration ON preflight_reports(migration_id);

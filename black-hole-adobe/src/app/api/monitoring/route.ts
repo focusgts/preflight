@@ -7,8 +7,12 @@
 
 import { success } from '@/lib/api/response';
 import { listMonitoredMigrations } from '@/lib/monitoring/drift-monitor';
+import { startScheduler } from '@/lib/monitoring/scheduler';
 
 export async function GET() {
+  // Lazy-init the drift monitoring scheduler on first request
+  startScheduler();
+
   const migrations = listMonitoredMigrations();
   return success(migrations);
 }

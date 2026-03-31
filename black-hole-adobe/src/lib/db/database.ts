@@ -184,6 +184,19 @@ export class DatabaseWrapper {
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       );
+      CREATE TABLE IF NOT EXISTS drift_baselines (
+        migration_id TEXT PRIMARY KEY, site_url TEXT NOT NULL,
+        data TEXT NOT NULL, captured_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS drift_checks (
+        id TEXT PRIMARY KEY, migration_id TEXT NOT NULL,
+        drift_score REAL NOT NULL, alert_level TEXT NOT NULL,
+        data TEXT NOT NULL, checked_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS preflight_reports (
+        id TEXT PRIMARY KEY, migration_id TEXT NOT NULL,
+        data TEXT NOT NULL, created_at TEXT NOT NULL
+      );
     `;
   }
 

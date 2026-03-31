@@ -106,11 +106,29 @@ export interface MonitoringSummary {
 }
 
 // ============================================================
-// In-Memory Store
+// Persistent Store (SQLite with in-memory fallback)
 // ============================================================
 
-const baselines = new Map<string, DriftBaseline>();
-const driftHistory = new Map<string, DriftCheck[]>();
+import type { PreFlightReport } from '@/lib/preflight/cloud-manager-rules';
+
+// In-memory fallback Maps — used only when SQLite is unavailable
+const _memBaselines = new Map<string, DriftBaseline>();
+const _memDriftHistory = new Map<string, DriftCheck[]>();
+const _memPreflightReports = new Map<string, PreFlightReport>();
+
+/**
+ * Attempt to get the database singleton. Returns null if SQLite is
+ * unavailable (e.g. edge runtime, missing native module).
+ */
+function tryGetDb(): import('@/lib/db/database').DatabaseWrapper | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getDatabase } = require('@/lib/db');
+    return getDatabase();
+  } catch {
+    return null;
+  }
+}
 
 // ── Store Helpers ────────────────────────────────────────────
 
@@ -118,44 +136,123 @@ export function storeBaseline(
   migrationId: string,
   baseline: DriftBaseline,
 ): void {
-  baselines.set(migrationId, baseline);
-  // Initialise history array if not present
-  if (!driftHistory.has(migrationId)) {
-    driftHistory.set(migrationId, []);
+  const db = tryGetDb();
+  if (db) {
+    try {
+      db.prepare(
+        `INSERT OR REPLACE INTO drift_baselines (migration_id, site_url, data, captured_at)
+         VALUES (?, ?, ?, ?)`,
+      ).run(migrationId, baseline.siteUrl, JSON.stringify(baseline), baseline.capturedAt);
+      return;
+    } catch (err) {
+      console.warn('[DriftMonitor] SQLite write failed, falling back to memory:', err);
+    }
+  }
+  _memBaselines.set(migrationId, baseline);
+  if (!_memDriftHistory.has(migrationId)) {
+    _memDriftHistory.set(migrationId, []);
   }
 }
 
 export function getBaseline(
   migrationId: string,
 ): DriftBaseline | undefined {
-  return baselines.get(migrationId);
+  const db = tryGetDb();
+  if (db) {
+    try {
+      const row = db.prepare(
+        'SELECT data FROM drift_baselines WHERE migration_id = ?',
+      ).get(migrationId) as { data: string } | undefined;
+      return row ? (JSON.parse(row.data) as DriftBaseline) : undefined;
+    } catch (err) {
+      console.warn('[DriftMonitor] SQLite read failed, falling back to memory:', err);
+    }
+  }
+  return _memBaselines.get(migrationId);
 }
 
 export function storeDriftCheck(
   migrationId: string,
   check: DriftCheck,
 ): void {
-  const history = driftHistory.get(migrationId) ?? [];
+  const db = tryGetDb();
+  if (db) {
+    try {
+      db.prepare(
+        `INSERT INTO drift_checks (id, migration_id, drift_score, alert_level, data, checked_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run(check.id, migrationId, check.driftScore, check.alertLevel, JSON.stringify(check), check.checkedAt);
+      return;
+    } catch (err) {
+      console.warn('[DriftMonitor] SQLite write failed, falling back to memory:', err);
+    }
+  }
+  const history = _memDriftHistory.get(migrationId) ?? [];
   history.push(check);
-  driftHistory.set(migrationId, history);
+  _memDriftHistory.set(migrationId, history);
 }
 
 export function getDriftHistory(
   migrationId: string,
   limit = 50,
 ): DriftCheck[] {
-  const history = driftHistory.get(migrationId) ?? [];
-  // Return most recent first, capped by limit
+  const db = tryGetDb();
+  if (db) {
+    try {
+      const rows = db.prepare(
+        'SELECT data FROM drift_checks WHERE migration_id = ? ORDER BY checked_at DESC LIMIT ?',
+      ).all(migrationId, limit) as { data: string }[];
+      return rows.map((r) => JSON.parse(r.data) as DriftCheck);
+    } catch (err) {
+      console.warn('[DriftMonitor] SQLite read failed, falling back to memory:', err);
+    }
+  }
+  const history = _memDriftHistory.get(migrationId) ?? [];
   return history.slice(-limit).reverse();
 }
 
 export function listMonitoredMigrations(): MonitoringSummary[] {
+  const db = tryGetDb();
+  if (db) {
+    try {
+      const rows = db.prepare(
+        `SELECT
+           b.migration_id,
+           b.site_url,
+           b.captured_at,
+           (SELECT dc.data FROM drift_checks dc WHERE dc.migration_id = b.migration_id ORDER BY dc.checked_at DESC LIMIT 1) AS latest_check,
+           (SELECT COUNT(*) FROM drift_checks dc2 WHERE dc2.migration_id = b.migration_id) AS total_checks
+         FROM drift_baselines b`,
+      ).all() as {
+        migration_id: string;
+        site_url: string;
+        captured_at: string;
+        latest_check: string | null;
+        total_checks: number;
+      }[];
+
+      return rows.map((r) => {
+        const latest = r.latest_check ? (JSON.parse(r.latest_check) as DriftCheck) : null;
+        return {
+          migrationId: r.migration_id,
+          siteUrl: r.site_url,
+          baselineCapturedAt: r.captured_at,
+          lastCheckAt: latest?.checkedAt ?? null,
+          currentAlertLevel: latest?.alertLevel ?? 'green',
+          currentDriftScore: latest?.driftScore ?? 0,
+          totalChecks: r.total_checks,
+        };
+      });
+    } catch (err) {
+      console.warn('[DriftMonitor] SQLite read failed, falling back to memory:', err);
+    }
+  }
+
+  // In-memory fallback
   const summaries: MonitoringSummary[] = [];
-
-  for (const [migrationId, baseline] of baselines.entries()) {
-    const history = driftHistory.get(migrationId) ?? [];
+  for (const [migrationId, baseline] of _memBaselines.entries()) {
+    const history = _memDriftHistory.get(migrationId) ?? [];
     const latest = history.length > 0 ? history[history.length - 1] : null;
-
     summaries.push({
       migrationId,
       siteUrl: baseline.siteUrl,
@@ -166,14 +263,65 @@ export function listMonitoredMigrations(): MonitoringSummary[] {
       totalChecks: history.length,
     });
   }
-
   return summaries;
 }
 
 export function deleteMonitoring(migrationId: string): boolean {
-  const hadBaseline = baselines.delete(migrationId);
-  driftHistory.delete(migrationId);
+  const db = tryGetDb();
+  if (db) {
+    try {
+      const result = db.prepare(
+        'DELETE FROM drift_baselines WHERE migration_id = ?',
+      ).run(migrationId);
+      db.prepare(
+        'DELETE FROM drift_checks WHERE migration_id = ?',
+      ).run(migrationId);
+      return result.changes > 0;
+    } catch (err) {
+      console.warn('[DriftMonitor] SQLite delete failed, falling back to memory:', err);
+    }
+  }
+  const hadBaseline = _memBaselines.delete(migrationId);
+  _memDriftHistory.delete(migrationId);
   return hadBaseline;
+}
+
+// ── Pre-Flight Report Persistence ────────────────────────────
+
+export function storePreflightReport(
+  migrationId: string,
+  report: PreFlightReport,
+): void {
+  const db = tryGetDb();
+  if (db) {
+    try {
+      db.prepare(
+        `INSERT INTO preflight_reports (id, migration_id, data, created_at)
+         VALUES (?, ?, ?, ?)`,
+      ).run(report.id, migrationId, JSON.stringify(report), report.timestamp);
+      return;
+    } catch (err) {
+      console.warn('[DriftMonitor] SQLite write failed for preflight report, falling back to memory:', err);
+    }
+  }
+  _memPreflightReports.set(migrationId, report);
+}
+
+export function getPreflightReport(
+  migrationId: string,
+): PreFlightReport | undefined {
+  const db = tryGetDb();
+  if (db) {
+    try {
+      const row = db.prepare(
+        'SELECT data FROM preflight_reports WHERE migration_id = ? ORDER BY created_at DESC LIMIT 1',
+      ).get(migrationId) as { data: string } | undefined;
+      return row ? (JSON.parse(row.data) as PreFlightReport) : undefined;
+    } catch (err) {
+      console.warn('[DriftMonitor] SQLite read failed for preflight report, falling back to memory:', err);
+    }
+  }
+  return _memPreflightReports.get(migrationId);
 }
 
 // ============================================================

@@ -11,6 +11,7 @@ import { Modal } from '@/components/ui/modal';
 import { MigrationWizard, type MigrationWizardSubmitData } from '@/components/migration/migration-wizard';
 import { ProgressTracker } from '@/components/migration/progress-tracker';
 import { PreFlightReport } from '@/components/migration/preflight-report';
+import { RegressionReport } from '@/components/migration/regression-report';
 import { EffortEstimate } from '@/components/assessment/effort-estimate';
 import { MigrationStatus, MigrationType, type MigrationProject, type PaginatedResponse } from '@/types';
 
@@ -459,6 +460,9 @@ export default function MigrationsPage() {
             )}
             {ASSESSED_STATUSES.has(selectedMigration.status) && (
               <PreFlightReport migrationId={selectedMigration.id} />
+            )}
+            {ASSESSED_STATUSES.has(selectedMigration.status) && (
+              <RegressionReport migrationId={selectedMigration.id} />
             )}
           </div>
         </Modal>

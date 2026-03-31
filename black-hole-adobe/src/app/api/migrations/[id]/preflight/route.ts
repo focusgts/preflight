@@ -12,16 +12,13 @@ import { getMigration } from '@/lib/api/store';
 import {
   PreFlightEngine,
   type PreFlightItem,
-  type PreFlightReport,
 } from '@/lib/preflight/cloud-manager-rules';
+import {
+  storePreflightReport,
+  getPreflightReport,
+} from '@/lib/monitoring/drift-monitor';
 
 type RouteParams = { params: Promise<{ id: string }> };
-
-/**
- * In-memory store for pre-flight reports keyed by migration id.
- * In production this would be persisted alongside the migration record.
- */
-const preflightReports = new Map<string, PreFlightReport>();
 
 export async function POST(
   request: NextRequest,
@@ -80,8 +77,8 @@ export async function POST(
     const engine = new PreFlightEngine();
     const report = engine.runPreFlight(items);
 
-    // Store the report for later retrieval
-    preflightReports.set(id, report);
+    // Store the report for later retrieval (SQLite-backed)
+    storePreflightReport(id, report);
 
     console.log(
       `[API] POST /api/migrations/${id}/preflight — ${report.findings.length} findings, ` +
@@ -107,7 +104,7 @@ export async function GET(
       return error('NOT_FOUND', `Migration ${id} not found`, 404);
     }
 
-    const report = preflightReports.get(id);
+    const report = getPreflightReport(id);
 
     if (!report) {
       return error(

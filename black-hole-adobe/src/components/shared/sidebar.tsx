@@ -10,6 +10,7 @@ import {
   ClipboardCheck,
   Plug,
   BarChart3,
+  Activity,
   Settings,
   ChevronLeft,
   ChevronRight,
@@ -24,6 +25,7 @@ const navItems = [
   { href: '/assessments', label: 'Assessments', icon: ClipboardCheck },
   { href: '/connectors', label: 'Connectors', icon: Plug },
   { href: '/reports', label: 'Reports', icon: BarChart3 },
+  { href: '/monitoring', label: 'Monitoring', icon: Activity },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
 
