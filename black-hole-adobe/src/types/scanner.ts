@@ -5,6 +5,8 @@
  * performance, SEO health, security headers, and accessibility.
  */
 
+import type { DetectedIntegration } from '@/lib/scanner/integration-detector';
+
 // ============================================================
 // Enums
 // ============================================================
@@ -47,6 +49,10 @@ export interface ScanResult {
   industryBenchmark: IndustryBenchmark | null;
   migrationUrgency: MigrationUrgency;
   scannedAt: string;
+  /** Third-party integrations detected via external discovery (ADR-033). */
+  integrations?: DetectedIntegration[];
+  /** Dispatcher security assessment (ADR-037). Absent if scan failed or was skipped. */
+  dispatcherSecurity?: import('@/lib/scanner/dispatcher-security').DispatcherSecurityResult;
 }
 
 // ============================================================
@@ -152,6 +158,12 @@ export {
   type DeploymentResult,
   type DeploymentType,
 } from '@/lib/scanner/version-detector';
+
+export type {
+  DetectedIntegration,
+  IntegrationCategory,
+  AemcsCompatibility,
+} from '@/lib/scanner/integration-detector';
 
 export interface ScanTierResults {
   dns: import('@/lib/scanner/dns-resolver').DNSResult;

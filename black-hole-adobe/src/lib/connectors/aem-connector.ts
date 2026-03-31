@@ -160,19 +160,58 @@ export class AEMConnector extends BaseConnector {
     this.batchSize = batchSize;
   }
 
-  /** Connect to the AEM instance and verify access. */
+  /** Detected environment type after connect(). */
+  private detectedEnvironment: 'cloud-service' | 'on-prem' | 'unknown' = 'unknown';
+
+  /** Get the detected environment type (only valid after connect()). */
+  getDetectedEnvironment(): 'cloud-service' | 'on-prem' | 'unknown' {
+    return this.detectedEnvironment;
+  }
+
+  /**
+   * Connect to the AEM instance and verify access.
+   *
+   * Uses /libs/granite/core/content/login.html as the primary connectivity
+   * check because /system/console endpoints are blocked on AEMaaCS.
+   * After verifying the login page, checks /content.1.json to confirm
+   * actual content access with the provided credentials.
+   */
   async connect(): Promise<void> {
     try {
-      const response = await this.makeRequest({
+      // Step 1: Verify AEM is reachable via the login page
+      const loginResponse = await this.makeRequest({
         method: 'GET',
-        url: this.buildUrl('/system/console/status-productinfo.json'),
+        url: this.buildUrl('/libs/granite/core/content/login.html'),
         headers: this.getAuthHeaders(),
         timeout: 15000,
       });
 
-      if (response.status !== 200) {
-        throw new ConnectorError('Failed to connect to AEM', 'AEM_CONNECT_FAILED', response.status);
+      if (loginResponse.status !== 200) {
+        throw new ConnectorError(
+          'Failed to reach AEM login page',
+          'AEM_CONNECT_FAILED',
+          loginResponse.status,
+        );
       }
+
+      // Step 2: Verify actual content access with credentials
+      const contentResponse = await this.makeRequest({
+        method: 'GET',
+        url: this.buildUrl('/content.1.json'),
+        headers: this.getAuthHeaders(),
+        timeout: 15000,
+      });
+
+      if (contentResponse.status !== 200) {
+        throw new ConnectorError(
+          'AEM is reachable but content access denied — check credentials',
+          'AEM_AUTH_FAILED',
+          contentResponse.status,
+        );
+      }
+
+      // Step 3: Detect environment type (Cloud Service vs on-prem)
+      await this.detectEnvironment();
 
       this.isConnected = true;
       this.config.status = 'connected';
@@ -187,6 +226,35 @@ export class AEMConnector extends BaseConnector {
             'AEM_CONNECT_FAILED',
           );
     }
+  }
+
+  /**
+   * Detect whether the instance is AEM as a Cloud Service or on-prem.
+   * Cloud Service blocks /system/console with 403.
+   */
+  private async detectEnvironment(): Promise<void> {
+    try {
+      const response = await this.makeRequest({
+        method: 'GET',
+        url: this.buildUrl('/system/console/status-productinfo.json'),
+        headers: this.getAuthHeaders(),
+        timeout: 10000,
+      });
+
+      // If we can access the system console, it is on-prem
+      if (response.status === 200) {
+        this.detectedEnvironment = 'on-prem';
+        return;
+      }
+    } catch (err) {
+      const statusCode = (err as ConnectorError).statusCode;
+      if (statusCode === 403 || statusCode === 404) {
+        // System console blocked — this is AEMaaCS
+        this.detectedEnvironment = 'cloud-service';
+        return;
+      }
+    }
+    this.detectedEnvironment = 'unknown';
   }
 
   async disconnect(): Promise<void> {
@@ -325,21 +393,36 @@ export class AEMConnector extends BaseConnector {
     return components;
   }
 
-  /** Extract OSGi configurations from /system/console. */
+  /**
+   * Extract OSGi configurations from /system/console.
+   * On AEMaaCS the system console is blocked (403/404), so this method
+   * gracefully returns an empty array with a warning instead of throwing.
+   */
   async extractConfigs(): Promise<AEMOSGiConfig[]> {
     this.ensureConnected();
-    const response = await this.makeRequest<Array<Record<string, unknown>>>({
-      method: 'GET',
-      url: this.buildUrl('/system/console/configMgr/.json'),
-      headers: this.getAuthHeaders(),
-    });
+    try {
+      const response = await this.makeRequest<Array<Record<string, unknown>>>({
+        method: 'GET',
+        url: this.buildUrl('/system/console/configMgr/.json'),
+        headers: this.getAuthHeaders(),
+      });
 
-    return (response.data || []).map((cfg) => ({
-      pid: (cfg.pid as string) || '',
-      factoryPid: (cfg.factoryPid as string) || null,
-      bundleLocation: (cfg.bundle_location as string) || null,
-      properties: (cfg.properties as Record<string, unknown>) || {},
-    }));
+      return (response.data || []).map((cfg) => ({
+        pid: (cfg.pid as string) || '',
+        factoryPid: (cfg.factoryPid as string) || null,
+        bundleLocation: (cfg.bundle_location as string) || null,
+        properties: (cfg.properties as Record<string, unknown>) || {},
+      }));
+    } catch (err) {
+      const statusCode = (err as ConnectorError).statusCode;
+      if (statusCode === 403 || statusCode === 404) {
+        console.warn(
+          '[AEMConnector] OSGi config endpoint unavailable (likely AEMaaCS) — returning empty configs',
+        );
+        return [];
+      }
+      throw err;
+    }
   }
 
   /** Extract workflow model definitions. */

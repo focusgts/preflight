@@ -76,14 +76,18 @@ export async function POST(request: Request): Promise<Response> {
     const db = getDatabase();
     const id = randomUUID();
 
+    const leadName = body.name.trim();
+    const leadEmail = body.email.trim().toLowerCase();
+    const leadCompany = body.company.trim();
+
     db.prepare(
       `INSERT INTO leads (id, name, email, company, phone, aem_version, num_sites, company_size, compliance, source)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       id,
-      body.name.trim(),
-      body.email.trim().toLowerCase(),
-      body.company.trim(),
+      leadName,
+      leadEmail,
+      leadCompany,
       body.phone || null,
       body.aemVersion || null,
       body.numSites || null,
@@ -91,6 +95,35 @@ export async function POST(request: Request): Promise<Response> {
       body.compliance ? JSON.stringify(body.compliance) : null,
       body.source || 'unknown',
     );
+
+    // Fire-and-forget webhook notification (never blocks the response)
+    const webhookUrl = process.env.BH_LEAD_WEBHOOK_URL;
+    if (webhookUrl) {
+      fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: `New Black Hole Lead: ${leadName} from ${leadCompany} (${leadEmail})`,
+          blocks: [
+            {
+              type: 'header',
+              text: { type: 'plain_text', text: 'New Black Hole Lead' },
+            },
+            {
+              type: 'section',
+              fields: [
+                { type: 'mrkdwn', text: `*Name:*\n${leadName}` },
+                { type: 'mrkdwn', text: `*Email:*\n${leadEmail}` },
+                { type: 'mrkdwn', text: `*Company:*\n${leadCompany}` },
+                { type: 'mrkdwn', text: `*Source:*\n${body.source || 'unknown'}` },
+              ],
+            },
+          ],
+        }),
+      }).catch((webhookErr) => {
+        console.warn('[Leads] Webhook notification failed (non-blocking):', webhookErr);
+      });
+    }
 
     return Response.json(
       {

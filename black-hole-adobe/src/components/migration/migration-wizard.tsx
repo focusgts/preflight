@@ -51,7 +51,17 @@ const COMMON_TARGET_FIELDS = [
 
 // ── Component ────────────────────────────────────────────────────────────
 
-export function MigrationWizard() {
+export interface MigrationWizardSubmitData {
+  name: string;
+  migrationType: MigrationType;
+  connectionType: 'api' | 'file_upload' | 'git' | 'package';
+}
+
+interface MigrationWizardProps {
+  onSubmit?: (data: MigrationWizardSubmitData) => Promise<string | null>;
+}
+
+export function MigrationWizard({ onSubmit }: MigrationWizardProps = {}) {
   const [currentStep, setCurrentStep] = useState(1);
   const [selectedType, setSelectedType] = useState<MigrationType | null>(null);
   const [projectName, setProjectName] = useState('');
@@ -59,6 +69,7 @@ export function MigrationWizard() {
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [fieldMappings, setFieldMappings] = useState<FieldMapping[]>([]);
   const [activeMigrationId, setActiveMigrationId] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Derive source columns from uploaded files
   const sourceColumns: string[] = uploadedFiles.length > 0 && uploadedFiles[0].preview.length > 0
@@ -445,13 +456,29 @@ export function MigrationWizard() {
                   </p>
                   <Button
                     size="lg"
-                    onClick={() => {
-                      // In production, this would POST to /api/migrations and return an ID
-                      setActiveMigrationId(`mig-${Date.now().toString(36)}`);
+                    disabled={isSubmitting}
+                    onClick={async () => {
+                      if (onSubmit && selectedType) {
+                        setIsSubmitting(true);
+                        try {
+                          const id = await onSubmit({
+                            name: projectName || 'New Migration',
+                            migrationType: selectedType,
+                            connectionType,
+                          });
+                          if (id) {
+                            setActiveMigrationId(id);
+                          }
+                        } finally {
+                          setIsSubmitting(false);
+                        }
+                      } else {
+                        setActiveMigrationId(`mig-${Date.now().toString(36)}`);
+                      }
                     }}
                   >
                     <Rocket className="h-4 w-4" />
-                    Launch Migration
+                    {isSubmitting ? 'Creating...' : 'Launch Migration'}
                   </Button>
                 </div>
               )}

@@ -116,14 +116,18 @@ export async function deleteSession(token: string): Promise<boolean> {
 
 export async function ensureDefaultAdmin(): Promise<void> {
   const db = getDatabase();
-  const existing = db.getUserByEmail('admin@blackhole.io');
+
+  const email = process.env.BH_ADMIN_EMAIL || 'admin@blackhole.io';
+  const password = process.env.BH_ADMIN_PASSWORD || 'admin123';
+
+  const existing = db.getUserByEmail(email);
   if (existing) return;
 
-  const hashedPw = await hashPassword('admin123');
+  const hashedPw = await hashPassword(password);
 
   db.createUser({
     id: randomUUID(),
-    email: 'admin@blackhole.io',
+    email,
     name: 'Admin',
     password: hashedPw,
     role: 'admin',
@@ -131,7 +135,7 @@ export async function ensureDefaultAdmin(): Promise<void> {
     updatedAt: new Date().toISOString(),
   });
 
-  console.log('[Auth] Default admin user created (admin@blackhole.io)');
+  console.log(`[Auth] Default admin user created (${email})`);
 }
 
 // -----------------------------------------------------------------------

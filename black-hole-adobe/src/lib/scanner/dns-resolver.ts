@@ -101,12 +101,20 @@ export async function resolveCNAME(domain: string): Promise<DNSResult> {
       .filter((record) => record.type === 5)
       .map((record) => record.data.replace(/\.$/, '').toLowerCase());
 
-    // Check for AEM Cloud Service
-    for (const cname of result.cnames) {
-      if (cname.includes(AEM_CLOUD_CNAME)) {
-        result.isAEMCloud = true;
-        result.confidence = 99;
-        break;
+    // Check if the domain itself is on adobeaemcloud.com (sandbox/direct URLs)
+    if (domain.toLowerCase().endsWith(AEM_CLOUD_CNAME)) {
+      result.isAEMCloud = true;
+      result.confidence = 99;
+    }
+
+    // Check for AEM Cloud Service in CNAME chain
+    if (!result.isAEMCloud) {
+      for (const cname of result.cnames) {
+        if (cname.includes(AEM_CLOUD_CNAME)) {
+          result.isAEMCloud = true;
+          result.confidence = 99;
+          break;
+        }
       }
     }
 

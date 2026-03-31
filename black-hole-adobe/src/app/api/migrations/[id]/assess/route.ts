@@ -1,17 +1,15 @@
 /**
  * POST /api/migrations/[id]/assess — Start assessment for a migration
  *
- * Transitions the migration to ASSESSING status, generates a simulated
- * assessment result, and stores it. In production this would kick off
- * an asynchronous assessment pipeline.
+ * ADR-040: Uses real AssessmentEngine when migration items are available,
+ * falls back to deterministic scoring from migration metadata otherwise.
+ * No Math.random() — repeated assessments produce consistent results.
  */
 
 import { type NextRequest } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import {
   MigrationStatus,
-  Severity,
-  CompatibilityLevel,
   PhaseType,
 } from '@/types';
 import type { AssessmentResult, MigrationPhase } from '@/types';
@@ -20,7 +18,22 @@ import {
   getMigration,
   updateMigration,
   createAssessment,
+  listConnectors,
 } from '@/lib/api/store';
+import {
+  AssessmentEngine,
+  type ContentAnalysisInput,
+  type IntegrationInput,
+} from '@/lib/engine/assessment';
+import {
+  computeDeterministicScores,
+  generateDeterministicFindings,
+  generateDeterministicRisks,
+  generateDeterministicRecommendations,
+  generateDeterministicContentHealth,
+  type DeterministicScoreInputs,
+} from '@/lib/engine/deterministic-scoring';
+import { effortEstimator } from '@/lib/engine/effort-estimator';
 
 type RouteParams = { params: Promise<{ id: string }> };
 
@@ -56,140 +69,145 @@ export async function POST(
 
     const now = new Date().toISOString();
 
-    // Generate assessment (in production, this would be async with AI analysis)
-    const codeScore = randomScore(55, 95);
-    const contentScore = randomScore(60, 98);
-    const integrationScore = randomScore(40, 90);
-    const configScore = randomScore(60, 95);
-    const complianceScore = randomScore(70, 100);
-    const overallScore = Math.round(
-      codeScore * 0.3 +
-      contentScore * 0.2 +
-      integrationScore * 0.2 +
-      configScore * 0.15 +
-      complianceScore * 0.15,
-    );
+    // Gather migration items from existing phases (if any)
+    const migrationItems = migration.phases?.flatMap((p) => p.items) ?? [];
 
-    const totalWeeks = Math.round(8 + Math.random() * 16);
-    const riskScore = Math.round((1 - overallScore / 100) * 100) / 100;
+    // Get connected connectors
+    const connectors = listConnectors().filter((c) => c.status === 'connected');
 
-    const assessment: AssessmentResult = {
-      id: `assess-${uuidv4().slice(0, 8)}`,
-      migrationProjectId: id,
-      overallScore,
-      codeCompatibilityScore: codeScore,
-      contentReadinessScore: contentScore,
-      integrationComplexityScore: integrationScore,
-      configurationReadinessScore: configScore,
-      complianceScore,
-      findings: [
-        {
-          id: `f-${uuidv4().slice(0, 6)}`,
-          category: 'Code Compatibility',
-          subCategory: 'Deprecated APIs',
-          severity: Severity.HIGH,
-          compatibilityLevel: CompatibilityLevel.MANUAL_FIX,
-          title: 'Deprecated API usage detected',
-          description:
-            'Several deprecated API calls were found that require manual migration to their modern equivalents.',
-          affectedPath: '/src/main',
-          remediationGuide:
-            'Replace deprecated API calls with their recommended alternatives. Refer to the migration guide for specific replacements.',
-          autoFixAvailable: false,
-          estimatedHours: 16,
-          bpaPatternCode: 'DEP-API-001',
+    let assessment: AssessmentResult;
+
+    // ── Path A: Real engine analysis when migration items exist ──
+    if (migrationItems.length > 0) {
+      const engine = new AssessmentEngine();
+
+      // Build content input from migration metadata or deterministic defaults
+      const contentInput: ContentAnalysisInput = {
+        totalPages: (migration.sourceEnvironment.metadata?.pageCount as number) ?? 500,
+        totalAssets: (migration.sourceEnvironment.metadata?.assetCount as number) ?? 1000,
+        totalContentFragments: (migration.sourceEnvironment.metadata?.contentFragments as number) ?? 50,
+        totalExperienceFragments: (migration.sourceEnvironment.metadata?.experienceFragments as number) ?? 15,
+        references: [],
+        metadata: [],
+        totalSizeGB: (migration.sourceEnvironment.metadata?.totalSizeGB as number) ?? 20,
+        publishedCount: (migration.sourceEnvironment.metadata?.publishedCount as number) ?? 400,
+      };
+
+      // Build integration inputs from connected connectors
+      const integrationInputs: IntegrationInput[] = connectors.map((c) => ({
+        id: c.id,
+        name: c.name,
+        type: (c.type as IntegrationInput['type']) ?? 'api',
+        authType: (c.connectionDetails?.authType as string) ?? 'api_key',
+        dataFlow: 'outbound' as const,
+        sourceConfig: c.connectionDetails ?? {},
+      }));
+
+      assessment = await engine.runAssessment(
+        migration,
+        migrationItems,
+        contentInput,
+        integrationInputs,
+      );
+
+      // Override the ID to use our format
+      assessment.id = `assess-${uuidv4().slice(0, 8)}`;
+      assessment.createdAt = now;
+
+    // ── Path B: Deterministic scoring from migration metadata ──
+    } else {
+      const scoreInputs: DeterministicScoreInputs = {
+        orgName: migration.organizationName,
+        sourcePlatform: migration.sourceEnvironment.platform,
+        sourceVersion: migration.sourceEnvironment.version,
+        targetPlatform: migration.targetEnvironment.platform,
+        migrationType: migration.migrationType,
+        componentCount: migration.sourceEnvironment.metadata?.componentCount as number | undefined,
+        pageCount: migration.sourceEnvironment.metadata?.pageCount as number | undefined,
+        assetCount: migration.sourceEnvironment.metadata?.assetCount as number | undefined,
+        integrationCount: connectors.length || undefined,
+        complianceFrameworks: migration.complianceRequirements,
+      };
+
+      const scores = computeDeterministicScores(scoreInputs);
+      const findings = generateDeterministicFindings(scoreInputs);
+      const risks = generateDeterministicRisks(scoreInputs, scores, findings);
+      const recommendations = generateDeterministicRecommendations(scoreInputs, scores, findings);
+      const contentHealth = generateDeterministicContentHealth({
+        seed: `${migration.organizationName}:${migration.sourceEnvironment.platform}:${migration.sourceEnvironment.version}`,
+        pageCount: scoreInputs.pageCount,
+        assetCount: scoreInputs.assetCount,
+      });
+
+      const { totalWeeks, confidenceLevel } = scores;
+
+      // Build timeline phases proportionally
+      const codeModWeeks = Math.max(1, Math.round(totalWeeks * 0.25));
+      const contentMigWeeks = Math.max(1, Math.round(totalWeeks * 0.20));
+      const testWeeks = Math.max(1, Math.round(totalWeeks * 0.15));
+
+      const siHourlyRate = 200;
+      const platformFee = 25000;
+      const estimatedSIHours = totalWeeks * 20;
+      const estimatedSICost = estimatedSIHours * siHourlyRate;
+      const totalEstimate = platformFee + estimatedSICost;
+
+      const traditionalMultiplier = 3.5;
+      const tradWeeks = Math.round(totalWeeks * traditionalMultiplier);
+      const tradCost = Math.round(estimatedSICost * traditionalMultiplier);
+      const timeSavingsPercent = Math.round(((tradWeeks - totalWeeks) / tradWeeks) * 100);
+      const costSavingsPercent = Math.round(((tradCost - totalEstimate) / tradCost) * 100);
+
+      assessment = {
+        id: `assess-${uuidv4().slice(0, 8)}`,
+        migrationProjectId: id,
+        overallScore: scores.overallScore,
+        codeCompatibilityScore: scores.codeScore,
+        contentReadinessScore: scores.contentScore,
+        integrationComplexityScore: scores.integrationScore,
+        configurationReadinessScore: scores.configScore,
+        complianceScore: scores.complianceScore,
+        findings,
+        contentHealth,
+        integrationMap: [],
+        riskFactors: risks,
+        estimatedTimeline: {
+          totalWeeks,
+          phases: [
+            { phase: PhaseType.ASSESSMENT, durationWeeks: 1, startWeek: 1, endWeek: 1, parallelizable: false },
+            { phase: PhaseType.PLANNING, durationWeeks: 1, startWeek: 2, endWeek: 2, parallelizable: false },
+            { phase: PhaseType.CODE_MODERNIZATION, durationWeeks: codeModWeeks, startWeek: 3, endWeek: 3 + codeModWeeks - 1, parallelizable: true },
+            { phase: PhaseType.CONTENT_MIGRATION, durationWeeks: contentMigWeeks, startWeek: 3, endWeek: 3 + contentMigWeeks - 1, parallelizable: true },
+            { phase: PhaseType.TESTING, durationWeeks: testWeeks, startWeek: totalWeeks - testWeeks, endWeek: totalWeeks - 1, parallelizable: false },
+            { phase: PhaseType.CUTOVER, durationWeeks: 1, startWeek: totalWeeks, endWeek: totalWeeks, parallelizable: false },
+          ],
+          confidenceLevel,
         },
-        {
-          id: `f-${uuidv4().slice(0, 6)}`,
-          category: 'Configuration',
-          subCategory: 'Environment Config',
-          severity: Severity.MEDIUM,
-          compatibilityLevel: CompatibilityLevel.AUTO_FIXABLE,
-          title: 'Configuration format requires update',
-          description:
-            'Environment configuration files use a legacy format that can be automatically converted.',
-          affectedPath: '/config',
-          remediationGuide:
-            'Run the automated config converter to update all configuration files to the target format.',
-          autoFixAvailable: true,
-          estimatedHours: 2,
-          bpaPatternCode: 'CFG-FMT-001',
+        estimatedCost: {
+          platformFee,
+          estimatedSIHours,
+          estimatedSICost,
+          totalEstimate,
+          currency: 'USD',
         },
-        {
-          id: `f-${uuidv4().slice(0, 6)}`,
-          category: 'Content',
-          subCategory: 'Asset Quality',
-          severity: Severity.LOW,
-          compatibilityLevel: CompatibilityLevel.COMPATIBLE,
-          title: 'Oversized assets detected',
-          description:
-            'Some assets exceed recommended size limits. Consider optimising before migration.',
-          affectedPath: '/content/dam',
-          remediationGuide:
-            'Use the bulk asset optimiser to resize images and compress videos before migration.',
-          autoFixAvailable: true,
-          estimatedHours: 4,
-          bpaPatternCode: null,
+        traditionalEstimate: {
+          durationWeeks: tradWeeks,
+          cost: tradCost,
+          timeSavingsPercent: Math.max(0, timeSavingsPercent),
+          costSavingsPercent: Math.max(0, costSavingsPercent),
         },
-      ],
-      contentHealth: {
-        totalPages: Math.round(200 + Math.random() * 3000),
-        totalAssets: Math.round(500 + Math.random() * 10000),
-        totalContentFragments: Math.round(10 + Math.random() * 200),
-        totalExperienceFragments: Math.round(5 + Math.random() * 50),
-        duplicatesDetected: Math.round(Math.random() * 100),
-        brokenReferences: Math.round(Math.random() * 30),
-        metadataCompleteness: randomScore(60, 95),
-        structuralIssues: Math.round(Math.random() * 10),
-        totalSizeGB: Math.round((5 + Math.random() * 80) * 10) / 10,
-        publishedPercentage: randomScore(60, 95),
-      },
-      integrationMap: [],
-      riskFactors: [
-        {
-          id: `risk-${uuidv4().slice(0, 6)}`,
-          severity: Severity.MEDIUM,
-          category: 'Technical',
-          description: 'Custom code may require manual refactoring',
-          probability: 0.6,
-          impact: 'Potential timeline extension of 2-3 weeks',
-          mitigation: 'Begin code review early and allocate dedicated engineering resources.',
-        },
-      ],
-      estimatedTimeline: {
-        totalWeeks,
-        phases: [
-          { phase: PhaseType.ASSESSMENT, durationWeeks: 1, startWeek: 1, endWeek: 1, parallelizable: false },
-          { phase: PhaseType.PLANNING, durationWeeks: 1, startWeek: 2, endWeek: 2, parallelizable: false },
-          { phase: PhaseType.CODE_MODERNIZATION, durationWeeks: Math.round(totalWeeks * 0.3), startWeek: 3, endWeek: 3 + Math.round(totalWeeks * 0.3) - 1, parallelizable: true },
-          { phase: PhaseType.CONTENT_MIGRATION, durationWeeks: Math.round(totalWeeks * 0.2), startWeek: 3, endWeek: 3 + Math.round(totalWeeks * 0.2) - 1, parallelizable: true },
-          { phase: PhaseType.TESTING, durationWeeks: Math.round(totalWeeks * 0.15), startWeek: totalWeeks - 3, endWeek: totalWeeks - 1, parallelizable: false },
-          { phase: PhaseType.CUTOVER, durationWeeks: 1, startWeek: totalWeeks, endWeek: totalWeeks, parallelizable: false },
-        ],
-        confidenceLevel: Math.round((0.65 + Math.random() * 0.3) * 100) / 100,
-      },
-      estimatedCost: {
-        platformFee: 10000 + Math.round(Math.random() * 15000),
-        estimatedSIHours: totalWeeks * 20,
-        estimatedSICost: totalWeeks * 20 * 200,
-        totalEstimate: 10000 + Math.round(Math.random() * 15000) + totalWeeks * 20 * 200,
-        currency: 'USD',
-      },
-      traditionalEstimate: {
-        durationWeeks: Math.round(totalWeeks * 2.5),
-        cost: Math.round((10000 + totalWeeks * 20 * 200) * 3),
-        timeSavingsPercent: 60,
-        costSavingsPercent: 67,
-      },
-      recommendations: [
-        'Address high-severity findings before beginning transformation phase.',
-        'Run automated fixers for all auto-fixable issues to reduce manual effort.',
-        'Perform a content audit to remove duplicate and unused assets.',
-      ],
-      createdAt: now,
-    };
+        recommendations,
+        createdAt: now,
+      };
+    }
 
     createAssessment(assessment);
+
+    // Generate effort estimate from the assessment (ADR-032)
+    const effortEstimate = effortEstimator.estimate(assessment, id);
+
+    // Derive risk score from overall assessment score
+    const riskScore = Math.round((1 - assessment.overallScore / 100) * 100) / 100;
 
     // Build assessment phase record
     const assessPhase: MigrationPhase = {
@@ -209,20 +227,16 @@ export async function POST(
       status: MigrationStatus.ASSESSED,
       assessment,
       riskScore,
-      estimatedDurationWeeks: totalWeeks,
+      estimatedDurationWeeks: assessment.estimatedTimeline.totalWeeks,
       estimatedCost: assessment.estimatedCost.totalEstimate,
       progress: 10,
       phases: [assessPhase],
     });
 
     console.log(`[API] POST /api/migrations/${id}/assess — assessment ${assessment.id} created`);
-    return success(assessment, 201);
+    return success({ assessment, effortEstimate }, 201);
   } catch (err) {
     console.error('[API] POST /api/migrations/[id]/assess error:', err);
     return error('INTERNAL_ERROR', 'Failed to start assessment', 500);
   }
-}
-
-function randomScore(min: number, max: number): number {
-  return Math.round(min + Math.random() * (max - min));
 }

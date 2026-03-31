@@ -22,6 +22,8 @@ import {
   type VersionResult,
   type DeploymentResult,
 } from './version-detector';
+import { detectIntegrations } from './integration-detector';
+import { scanDispatcherSecurity } from './dispatcher-security';
 
 // ============================================================
 // Constants
@@ -264,6 +266,22 @@ export class SiteScanner {
     );
     const recommendations = this.calculator.getRecommendations(categories);
 
+    // Integration discovery (ADR-033) — fail-safe so it never breaks the scan
+    let integrations: import('./integration-detector').DetectedIntegration[] | undefined;
+    try {
+      integrations = detectIntegrations(raw);
+    } catch (err) {
+      console.warn('[Scanner] Integration detection failed, continuing without:', err);
+    }
+
+    // Dispatcher security assessment (ADR-037) — fail-safe so it never breaks the scan
+    let dispatcherSecurity: import('./dispatcher-security').DispatcherSecurityResult | undefined;
+    try {
+      dispatcherSecurity = await scanDispatcherSecurity(normalizedUrl);
+    } catch (err) {
+      console.warn('[Scanner] Dispatcher security scan failed, continuing without:', err);
+    }
+
     return {
       url: normalizedUrl,
       domain,
@@ -277,6 +295,8 @@ export class SiteScanner {
       industryBenchmark: benchmark,
       migrationUrgency: urgency,
       scannedAt: new Date().toISOString(),
+      integrations,
+      dispatcherSecurity,
     };
   }
 
