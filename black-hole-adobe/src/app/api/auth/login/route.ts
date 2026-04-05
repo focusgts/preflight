@@ -73,10 +73,12 @@ export async function POST(request: Request): Promise<Response> {
       { status: 200 },
     );
 
-    // Set httpOnly cookie
+    // Set httpOnly cookie (Secure flag added in production for HTTPS-only)
+    const isProduction = process.env.NODE_ENV === 'production';
+    const securePart = isProduction ? '; Secure' : '';
     response.headers.set(
       'Set-Cookie',
-      `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`,
+      `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax${securePart}; Max-Age=86400`,
     );
 
     return response;

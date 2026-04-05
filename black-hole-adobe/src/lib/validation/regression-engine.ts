@@ -100,6 +100,8 @@ export interface BaselineSnapshot {
 // Constants
 // ============================================================
 
+import { validateScanTarget } from '@/lib/security/url-validator';
+
 const USER_AGENT = 'BlackHole-Regression/1.0 (Migration Validator; focusgts.com)';
 const FETCH_TIMEOUT_MS = 15_000;
 const CONCURRENCY = 5;
@@ -585,6 +587,12 @@ export async function captureBaseline(
   pageLimit: number,
   excludePatterns: string[] = [],
 ): Promise<BaselineSnapshot> {
+  // ADR-047: SSRF protection
+  const sourceValidation = validateScanTarget(sourceUrl);
+  if (!sourceValidation.valid) {
+    throw new Error(`Source URL rejected: ${sourceValidation.reason}`);
+  }
+
   const start = Date.now();
   const pages = await crawlSite(sourceUrl, pageLimit, excludePatterns);
 
@@ -606,6 +614,16 @@ export async function runRegression(
   migrationId: string,
   config: RegressionConfig,
 ): Promise<RegressionReport> {
+  // ADR-047: SSRF protection — validate both source and target
+  const sourceValidation = validateScanTarget(config.sourceUrl);
+  if (!sourceValidation.valid) {
+    throw new Error(`Source URL rejected: ${sourceValidation.reason}`);
+  }
+  const targetValidation = validateScanTarget(config.targetUrl);
+  if (!targetValidation.valid) {
+    throw new Error(`Target URL rejected: ${targetValidation.reason}`);
+  }
+
   const start = Date.now();
   const normalizedSource = normalizeUrl(config.sourceUrl);
   const normalizedTarget = normalizeUrl(config.targetUrl);

@@ -535,7 +535,7 @@ export default function CustomerPortalPage() {
       try {
         // Fetch migrations for this org — use search to match orgId or orgName
         const res = await fetch(
-          `/api/migrations?search=${encodeURIComponent(orgId)}&pageSize=100`,
+          `/api/portal/${encodeURIComponent(orgId)}/migrations`,
         );
         if (!res.ok) {
           throw new Error(`API returned ${res.status}`);

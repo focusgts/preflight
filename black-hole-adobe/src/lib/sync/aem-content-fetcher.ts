@@ -9,6 +9,7 @@
  */
 
 import type { SnapshotItem } from '@/types/sync';
+import { validateScanTarget } from '@/lib/security/url-validator';
 
 // ============================================================
 // Types
@@ -69,6 +70,15 @@ export async function fetchAemContentItems(
   basePath: string,
   credentials: Record<string, unknown> | null,
 ): Promise<SnapshotItem[]> {
+  // ADR-047: SSRF protection — validate AEM URL before fetching
+  const validation = validateScanTarget(url);
+  if (!validation.valid) {
+    console.warn(
+      `[aem-content-fetcher] AEM URL rejected: ${validation.reason}`,
+    );
+    return [];
+  }
+
   try {
     const headers = buildAuthHeaders(credentials);
     const hits = await fetchPageList(url, basePath, headers);

@@ -14,6 +14,7 @@ import {
 } from '@/types';
 import type { AssessmentResult, MigrationPhase } from '@/types';
 import { success, error } from '@/lib/api/response';
+import { checkRateLimit, RATE_LIMITS } from '@/lib/api/rate-limiter';
 import {
   getMigration,
   updateMigration,
@@ -41,6 +42,12 @@ export async function POST(
   _request: NextRequest,
   { params }: RouteParams,
 ) {
+  const ip = _request.headers.get('x-forwarded-for') || 'unknown';
+  const { allowed, resetAt } = checkRateLimit(ip, RATE_LIMITS.authenticatedWrite);
+  if (!allowed) {
+    return error('RATE_LIMITED', 'Too many requests. Try again later.', 429, { retryAfter: Math.ceil((resetAt - Date.now()) / 1000) });
+  }
+
   try {
     const { id } = await params;
     const migration = getMigration(id);

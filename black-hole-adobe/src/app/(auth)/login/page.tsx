@@ -168,13 +168,22 @@ export default function LoginPage() {
             </button>
           </form>
 
-          {/* Demo credentials hint */}
-          <div className="mt-6 rounded-lg border border-slate-800/50 bg-slate-900/50 px-4 py-3">
-            <p className="text-xs font-medium text-slate-500">Demo credentials</p>
-            <p className="mt-1 font-mono text-xs text-slate-400">
-              admin@blackhole.io / admin123
-            </p>
-          </div>
+          {/* Demo credentials hint — hidden in production builds */}
+          {process.env.NEXT_PUBLIC_SHOW_DEMO_CREDS === 'true' ||
+          process.env.NODE_ENV !== 'production' ? (
+            <div className="mt-6 rounded-lg border border-slate-800/50 bg-slate-900/50 px-4 py-3">
+              <p className="text-xs font-medium text-slate-500">Demo credentials</p>
+              <p className="mt-1 font-mono text-xs text-slate-400">
+                admin@blackhole.io / admin123
+              </p>
+            </div>
+          ) : (
+            <div className="mt-6 rounded-lg border border-slate-800/50 bg-slate-900/50 px-4 py-3">
+              <p className="text-xs font-medium text-slate-500">
+                Enter your credentials to sign in
+              </p>
+            </div>
+          )}
         </div>
 
         <p className="mt-6 text-center text-xs text-slate-600">

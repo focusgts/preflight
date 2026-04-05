@@ -1,11 +1,30 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Search, Bell, User } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 
+interface AuthUser {
+  name: string;
+  email: string;
+}
+
 export function Header() {
   const [searchFocused, setSearchFocused] = useState(false);
+  const [user, setUser] = useState<AuthUser | null>(null);
+
+  useEffect(() => {
+    fetch('/api/auth/me')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.success && data.data?.user) {
+          setUser({ name: data.data.user.name, email: data.data.user.email });
+        }
+      })
+      .catch(() => {
+        // Silently fall back to default display
+      });
+  }, []);
 
   return (
     <header className="flex h-16 items-center justify-between border-b border-slate-800 bg-slate-950/80 px-6 backdrop-blur-sm">
@@ -45,8 +64,8 @@ export function Header() {
             <User className="h-4 w-4 text-white" />
           </div>
           <div className="hidden text-left sm:block">
-            <p className="text-sm font-medium text-white">Admin User</p>
-            <p className="text-xs text-slate-400">admin@blackhole.dev</p>
+            <p className="text-sm font-medium text-white">{user?.name ?? 'User'}</p>
+            <p className="text-xs text-slate-400">{user?.email ?? ''}</p>
           </div>
         </button>
       </div>

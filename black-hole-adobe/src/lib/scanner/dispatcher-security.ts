@@ -51,6 +51,8 @@ export interface HeaderCheck {
 // Constants
 // ============================================================
 
+import { validateScanTarget } from '@/lib/security/url-validator';
+
 const PROBE_TIMEOUT_MS = 3000;
 const USER_AGENT = 'BlackHole-Security-Scanner/1.0';
 
@@ -284,6 +286,19 @@ async function probeHead(
 export async function scanDispatcherSecurity(
   url: string,
 ): Promise<DispatcherSecurityResult> {
+  // ADR-047: SSRF protection — block internal/private targets
+  const validation = validateScanTarget(url);
+  if (!validation.valid) {
+    console.warn(`[dispatcher-security] Scan target rejected: ${validation.reason}`);
+    return {
+      overallRisk: 'secure',
+      score: 0,
+      findings: [],
+      headers: [],
+      summary: { critical: 0, high: 0, medium: 0, low: 0, passed: 0 },
+    };
+  }
+
   const findings: SecurityFinding[] = [];
   const headerChecks: HeaderCheck[] = [];
   let passed = 0;

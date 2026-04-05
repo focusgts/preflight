@@ -9,6 +9,7 @@
 import { success, error } from '@/lib/api/response';
 import type { ScanResult } from '@/types/scanner';
 import { SiteScanner } from '@/lib/scanner/site-scanner';
+import { validateScanTarget } from '@/lib/security/url-validator';
 
 // ── In-memory rate limiter ────────────────────────────────
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
@@ -75,6 +76,16 @@ export async function POST(request: Request) {
 
     if (!isValidUrl(url)) {
       return error('INVALID_URL', 'Please enter a valid domain or URL.', 400);
+    }
+
+    // ADR-047: SSRF protection — block internal/private targets at the API layer
+    const validation = validateScanTarget(url);
+    if (!validation.valid) {
+      return error(
+        'SSRF_BLOCKED',
+        'Cannot scan internal or private network addresses.',
+        400,
+      );
     }
 
     const domain = extractDomain(url);

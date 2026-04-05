@@ -24,6 +24,7 @@ import {
 } from './version-detector';
 import { detectIntegrations } from './integration-detector';
 import { scanDispatcherSecurity } from './dispatcher-security';
+import { validateScanTarget } from '@/lib/security/url-validator';
 
 // ============================================================
 // Constants
@@ -187,6 +188,12 @@ export class SiteScanner {
    * Full 5-tier scan of a public URL.
    */
   async scan(url: string, industry?: string): Promise<ScanResult> {
+    // ADR-047: SSRF protection — block internal/private targets
+    const validation = validateScanTarget(url);
+    if (!validation.valid) {
+      throw new Error(`Scan target rejected: ${validation.reason}`);
+    }
+
     const normalizedUrl = this.normalizeUrl(url);
     const domain = this.extractDomain(normalizedUrl);
 

@@ -11,6 +11,7 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { SiteScanner } from '@/lib/scanner/site-scanner';
+import { validateScanTarget } from '@/lib/security/url-validator';
 import type { ScanResult, RawScanData, PlatformDetails } from '@/types/scanner';
 
 // ============================================================
@@ -339,6 +340,12 @@ export class DriftMonitor {
     migrationId: string,
     siteUrl: string,
   ): Promise<DriftBaseline> {
+    // ADR-047: SSRF protection
+    const validation = validateScanTarget(siteUrl);
+    if (!validation.valid) {
+      throw new Error(`Site URL rejected: ${validation.reason}`);
+    }
+
     const scanResult = await this.scanner.scan(siteUrl);
 
     const baseline = this.buildBaselineFromScan(

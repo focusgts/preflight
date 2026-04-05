@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import type { ConnectorConfig } from '@/types';
 import { success, error } from '@/lib/api/response';
+import { checkRateLimit, RATE_LIMITS } from '@/lib/api/rate-limiter';
 import { AEMConnector } from '@/lib/connectors/aem-connector';
 
 // ── Validation ──────────────────────────────────────────────────────────
@@ -32,6 +33,12 @@ const connectSchema = z.object({
 // ── Route handler ───────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
+  const ip = request.headers.get('x-forwarded-for') || 'unknown';
+  const { allowed, resetAt } = checkRateLimit(ip, RATE_LIMITS.connectorOps);
+  if (!allowed) {
+    return error('RATE_LIMITED', 'Too many requests. Try again later.', 429, { retryAfter: Math.ceil((resetAt - Date.now()) / 1000) });
+  }
+
   const startTime = Date.now();
 
   try {
