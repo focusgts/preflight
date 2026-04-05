@@ -8,10 +8,10 @@
  * 1. Final sync (capture any last changes)
  * 2. Pause source authoring briefly (minutes, not days/weeks)
  * 3. Verify all changes synced
- * 4. Switch DNS / routing
- * 5. Verify target is live
- * 6. Resume authoring on target
- * 7. Start reverse-sync (catch any stragglers)
+ * 4. Switch DNS / routing           (ADR-053: CDN provider)
+ * 5. CDN config: purge + SSL verify (ADR-053: CDN provider)
+ * 6. Smoke test via regression       (ADR-053: regression engine)
+ * 7. Go live + drift baseline        (ADR-053: drift monitor)
  */
 
 import type {
@@ -21,6 +21,11 @@ import type {
 } from '@/types/sync';
 import { CutoverStepStatus, SyncStatus } from '@/types/sync';
 import { ContentSyncEngine, SyncError } from './content-sync-engine';
+import type { CDNProvider, CDNProviderConfig } from '@/lib/deployment/cdn-manager';
+import { createCDNProvider } from '@/lib/deployment/cdn-manager';
+import { runRegression } from '@/lib/validation/regression-engine';
+import type { RegressionConfig } from '@/lib/validation/regression-engine';
+import { DriftMonitor } from '@/lib/monitoring/drift-monitor';
 
 export interface CutoverValidation {
   passed: boolean;
@@ -36,7 +41,23 @@ export interface CutoverCheck {
 }
 
 export class CutoverManager {
-  constructor(private readonly syncEngine: ContentSyncEngine) {}
+  private cdnProvider: CDNProvider;
+  private driftMonitor: DriftMonitor;
+
+  constructor(
+    private readonly syncEngine: ContentSyncEngine,
+    cdnConfig?: CDNProviderConfig,
+  ) {
+    this.cdnProvider = createCDNProvider(cdnConfig);
+    this.driftMonitor = new DriftMonitor();
+  }
+
+  /**
+   * Replace the CDN provider at runtime (e.g. when credentials become available).
+   */
+  setCDNProvider(provider: CDNProvider): void {
+    this.cdnProvider = provider;
+  }
 
   /**
    * Generate a cutover plan with steps, estimated duration, and rollback plan.
@@ -258,19 +279,19 @@ export class CutoverManager {
       this.step(1, 'Final content sync', 'Capture and apply any remaining source changes', finalSyncMinutes, true),
       this.step(2, 'Pause source authoring', 'Temporarily disable content editing in the source CMS', 1, true),
       this.step(3, 'Verify sync completeness', 'Confirm all content changes have been replicated to the target', 2, true),
-      this.step(4, 'Switch DNS / routing', 'Update DNS records or CDN routing to point to the target system', 3, true),
-      this.step(5, 'Verify target is live', 'Run smoke tests to confirm the target system is serving content correctly', 2, true),
-      this.step(6, 'Resume authoring on target', 'Enable content editing in the target system', 1, true),
-      this.step(7, 'Start reverse-sync', 'Monitor for any straggler changes that arrived during cutover and sync them', 3, false),
+      this.step(4, 'Switch DNS / routing', 'Update DNS records via CDN provider to point to the target system', 3, true),
+      this.step(5, 'CDN config and SSL verification', 'Purge CDN cache and verify SSL certificate for the target domain', 2, true),
+      this.step(6, 'Smoke test', 'Run regression tests to confirm the target system is serving content correctly', 3, true),
+      this.step(7, 'Go live', 'Mark migration as complete and capture drift monitoring baseline', 2, false),
     ];
   }
 
   private buildRollbackSteps(): CutoverStep[] {
     return [
-      this.step(1, 'Revert DNS / routing', 'Point DNS back to the source system', 3, true),
-      this.step(2, 'Resume source authoring', 'Re-enable content editing in the source CMS', 1, true),
+      this.step(1, 'Revert DNS / routing', 'Point DNS back to the source system via CDN provider', 3, true),
+      this.step(2, 'Purge CDN cache', 'Clear CDN cache after DNS revert to serve fresh content', 2, true),
       this.step(3, 'Restart forward sync', 'Resume continuous sync from source to target', 2, true),
-      this.step(4, 'Verify source is live', 'Confirm the source system is serving content correctly', 2, true),
+      this.step(4, 'Verify source is live', 'Verify DNS propagation points back to the source system', 2, true),
     ];
   }
 
@@ -313,22 +334,134 @@ export class CutoverManager {
           }
         }
         break;
-      case 4: // Switch DNS — in production this would call a CDN/DNS API
-        // Simulated — real implementation would integrate with CloudFlare, Akamai, etc.
+      case 4: // Switch DNS via CDN provider (ADR-053)
+        {
+          const { sync: s4 } = this.syncEngine.getSyncStatus(syncId);
+          const targetDomain = new URL(s4.targetConfig.url).hostname;
+          const targetCname = `cdn.${targetDomain}`;
+
+          const dnsResult = await this.cdnProvider.updateDNS(targetDomain, targetCname);
+          if (!dnsResult.success) {
+            throw new SyncError('DNS switch failed — CDN provider returned an error');
+          }
+        }
         break;
-      case 5: // Verify target — in production this runs smoke tests
+
+      case 5: // CDN config: purge cache + verify SSL (ADR-053)
+        {
+          const { sync: s5 } = this.syncEngine.getSyncStatus(syncId);
+          const domain5 = new URL(s5.targetConfig.url).hostname;
+
+          const purgeResult = await this.cdnProvider.purgeCache(domain5);
+          if (!purgeResult.success) {
+            throw new SyncError('CDN cache purge failed');
+          }
+
+          const sslResult = await this.cdnProvider.verifySSL(domain5);
+          if (!sslResult.valid) {
+            throw new SyncError(
+              `SSL verification failed for ${domain5} — issuer: ${sslResult.issuer}`,
+            );
+          }
+        }
         break;
-      case 6: // Resume authoring on target
+
+      case 6: // Smoke test via regression engine (ADR-053)
+        {
+          const { sync: s6 } = this.syncEngine.getSyncStatus(syncId);
+          const regressionConfig: RegressionConfig = {
+            sourceUrl: s6.sourceConfig.url,
+            targetUrl: s6.targetConfig.url,
+            pageLimit: 50,
+            checkSeo: true,
+            checkPerformance: true,
+            checkContent: true,
+            excludePatterns: [],
+          };
+
+          const report = await runRegression(s6.migrationId, regressionConfig);
+          if (report.summary.criticalIssues > 0) {
+            throw new SyncError(
+              `Smoke test found ${report.summary.criticalIssues} critical issue(s) across ${report.summary.pagesCompared} pages — aborting cutover`,
+            );
+          }
+        }
         break;
-      case 7: // Start reverse-sync
+
+      case 7: // Go live: finalize sync + capture drift baseline (ADR-053)
+        {
+          const { sync: s7 } = this.syncEngine.getSyncStatus(syncId);
+
+          // Stop the sync engine — migration is complete
+          await this.syncEngine.stopSync(syncId);
+
+          // Capture drift monitoring baseline for post-go-live monitoring
+          try {
+            await this.driftMonitor.captureBaseline(
+              s7.migrationId,
+              s7.targetConfig.url,
+            );
+          } catch {
+            // Non-fatal — drift monitoring baseline capture is best-effort
+          }
+        }
         break;
       default:
         break;
     }
   }
 
-  private async executeRollbackStep(_syncId: string, _step: CutoverStep): Promise<void> {
-    // Real implementation would revert DNS, re-enable source, etc.
+  private async executeRollbackStep(syncId: string, step: CutoverStep): Promise<void> {
+    switch (step.order) {
+      case 1: // Revert DNS — point back to source (ADR-053)
+        {
+          const { sync } = this.syncEngine.getSyncStatus(syncId);
+          const targetDomain = new URL(sync.targetConfig.url).hostname;
+          const originalCname = new URL(sync.sourceConfig.url).hostname;
+
+          await this.cdnProvider.updateDNS(targetDomain, originalCname);
+        }
+        break;
+
+      case 2: // Purge cache after DNS revert (ADR-053)
+        {
+          const { sync: s2 } = this.syncEngine.getSyncStatus(syncId);
+          const domain = new URL(s2.targetConfig.url).hostname;
+          await this.cdnProvider.purgeCache(domain);
+        }
+        break;
+
+      case 3: // Restart forward sync
+        {
+          const { sync: s3 } = this.syncEngine.getSyncStatus(syncId);
+          // If sync was completed or in cutover, resume it
+          if (
+            s3.status === SyncStatus.COMPLETED ||
+            s3.status === SyncStatus.CUTOVER_IN_PROGRESS
+          ) {
+            await this.syncEngine.resumeSync(syncId);
+          }
+        }
+        break;
+
+      case 4: // Verify source is live — best-effort DNS check
+        {
+          const { sync: s4 } = this.syncEngine.getSyncStatus(syncId);
+          const domain = new URL(s4.targetConfig.url).hostname;
+          const expectedSource = new URL(s4.sourceConfig.url).hostname;
+
+          const dnsCheck = await this.cdnProvider.verifyDNS(domain, expectedSource);
+          if (!dnsCheck.propagated) {
+            throw new SyncError(
+              `DNS rollback verification failed — domain still points to ${dnsCheck.currentTarget}`,
+            );
+          }
+        }
+        break;
+
+      default:
+        break;
+    }
   }
 
   private minutesBetween(start: string, end: string): number {

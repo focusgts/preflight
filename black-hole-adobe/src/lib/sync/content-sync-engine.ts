@@ -30,6 +30,13 @@ import {
 import { ChangeDetector } from './change-detector';
 import { ConflictResolver } from './conflict-resolver';
 import { fetchAemContentItems } from './aem-content-fetcher';
+import {
+  slingPost,
+  slingDelete,
+  toAemCredentials,
+  hasRealCredentials,
+} from '@/lib/migration/aem-content-writer';
+import { ChangeType } from '@/types/sync';
 
 // ============================================================
 // Types
@@ -548,13 +555,45 @@ export class ContentSyncEngine {
   }
 
   /**
-   * Write a change to the target system.
+   * Write a change to the target system via Sling POST.
+   *
+   * If no real credentials are configured the method returns silently
+   * (simulation / demo mode). For real credentials it dispatches to:
+   * - created/modified  -> Sling POST with the change's `after` properties
+   * - deleted           -> Sling POST :operation=delete
+   *
+   * ADR-050: Content Transfer Implementation
    */
   protected async writeToTarget(
-    _config: SyncTargetConfig,
-    _change: ContentChange,
+    config: SyncTargetConfig,
+    change: ContentChange,
   ): Promise<void> {
-    // Override in subclass or mock for real connector integration
+    // Demo mode — no real target configured
+    if (!config.url || !hasRealCredentials(config.credentials)) {
+      return;
+    }
+
+    const creds = toAemCredentials(config.credentials);
+    if (!creds) return;
+
+    const isDelete =
+      change.type === ChangeType.PAGE_DELETED ||
+      change.type === ChangeType.ASSET_DELETED;
+
+    if (isDelete) {
+      const result = await slingDelete(config.url, change.path, creds);
+      if (!result.success) {
+        throw new SyncError(result.error ?? `Failed to delete ${change.path}`);
+      }
+      return;
+    }
+
+    // For created / modified: POST the after-state properties
+    const properties = change.after ?? {};
+    const result = await slingPost(config.url, change.path, properties, creds);
+    if (!result.success) {
+      throw new SyncError(result.error ?? `Failed to write ${change.path}`);
+    }
   }
 }
 

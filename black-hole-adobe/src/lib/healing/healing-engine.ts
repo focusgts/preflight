@@ -17,6 +17,11 @@
 import { v4 as uuid } from 'uuid';
 import { DiagnosticEngine } from './diagnostics';
 import { RemedyLibrary } from './remedy-library';
+import {
+  RemedyExecutorRegistry,
+  type TargetConfig,
+  type ExecutionResult,
+} from './remedy-executors';
 import type { PatternMatcher } from '@/lib/ruvector/pattern-matcher';
 import type { PatternRecorder } from '@/lib/ruvector/pattern-recorder';
 import type { MigrationItem } from '@/types';
@@ -46,6 +51,8 @@ export interface HealingEngineOptions {
   autoApplyEnabled: boolean;
   /** Maximum retry attempts after applying a remedy. */
   maxRetryAfterFix: number;
+  /** Target AEM instance for real remediation. When null, falls back to in-memory fixes. */
+  targetConfig?: TargetConfig | null;
   /** Callback when a fix is auto-applied. */
   onAutoApply?: (action: HealingAction) => void;
   /** Callback when a fix needs approval. */
@@ -72,10 +79,12 @@ const DEFAULT_OPTIONS: HealingEngineOptions = {
 export class HealingEngine {
   private readonly diagnostics: DiagnosticEngine;
   private readonly remedyLibrary: RemedyLibrary;
+  private readonly executorRegistry: RemedyExecutorRegistry;
   private readonly options: HealingEngineOptions;
 
   private actions: Map<string, HealingAction[]> = new Map();
   private circuitBreakers: Map<string, CircuitBreakerState> = new Map();
+  private rollbackActions: Map<string, () => Promise<void>> = new Map();
 
   constructor(
     private readonly patternMatcher?: PatternMatcher,
@@ -84,6 +93,7 @@ export class HealingEngine {
   ) {
     this.diagnostics = new DiagnosticEngine();
     this.remedyLibrary = new RemedyLibrary();
+    this.executorRegistry = RemedyExecutorRegistry.createDefault();
     this.options = { ...DEFAULT_OPTIONS, ...options };
   }
 
@@ -443,6 +453,51 @@ export class HealingEngine {
     migrationId: string,
     retryCount: number,
   ): Promise<{ success: boolean; modifiedItem: Record<string, unknown>; description: string }> {
+    const targetConfig = this.options.targetConfig;
+
+    // ADR-054: Attempt real remediation when target credentials are available
+    if (targetConfig?.url && targetConfig.credentials) {
+      const executorType = this.mapDiagnosisToExecutor(diagnosis);
+      const executor = executorType ? this.executorRegistry.get(executorType) : null;
+
+      if (executor) {
+        try {
+          const execResult: ExecutionResult = await executor.execute(
+            targetConfig,
+            {
+              itemPath: item.targetPath ?? item.sourcePath,
+              errorMessage: diagnosis.errorMessage,
+              phase: diagnosis.context.phase,
+            },
+          );
+
+          // Store rollback action for potential undo
+          if (execResult.rollbackAction) {
+            this.rollbackActions.set(
+              `${migrationId}:${item.id}`,
+              execResult.rollbackAction,
+            );
+          }
+
+          console.info(
+            `[healing-engine] Real executor (${executorType}): ${execResult.success ? 'success' : 'failed'} — ${execResult.description}`,
+          );
+
+          return {
+            success: execResult.success,
+            modifiedItem: execResult.success ? { id: item.id } : {},
+            description: execResult.description,
+          };
+        } catch (err) {
+          console.warn(
+            `[healing-engine] Real executor (${executorType}) threw: ${err instanceof Error ? err.message : String(err)}. Falling back to in-memory remedy.`,
+          );
+          // Fall through to in-memory remedy below
+        }
+      }
+    }
+
+    // Fallback: in-memory remedy (demo mode / no executor match)
     const target: RemedyTarget = {
       id: item.id,
       type: item.type,
@@ -472,6 +527,59 @@ export class HealingEngine {
         modifiedItem: {},
         description: `Remedy execution failed: ${err instanceof Error ? err.message : String(err)}`,
       };
+    }
+  }
+
+  /**
+   * Map a diagnosis error type to the appropriate real executor type.
+   * Returns null if no executor is applicable.
+   */
+  private mapDiagnosisToExecutor(diagnosis: Diagnosis): string | null {
+    switch (diagnosis.errorType) {
+      case 'content_integrity':
+        return 'content-retry';
+      case 'permission_denied':
+        return 'permission-fix';
+      case 'configuration_error': {
+        // Index-related configs use index rebuild
+        if (/index/i.test(diagnosis.errorMessage)) return 'index-rebuild';
+        return null;
+      }
+      case 'code_compatibility': {
+        // Bundle issues use bundle restart
+        if (/bundle/i.test(diagnosis.errorMessage)) return 'bundle-restart';
+        return null;
+      }
+      case 'api_error': {
+        // Deployment-related API errors use deployment retry
+        if (/pipeline|deploy|cloud\s*manager/i.test(diagnosis.errorMessage)) {
+          return 'deployment-retry';
+        }
+        return null;
+      }
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Attempt to rollback a previously executed real remedy.
+   * Returns true if rollback was performed, false if no rollback was available.
+   */
+  async rollbackRemedy(migrationId: string, itemId: string): Promise<boolean> {
+    const key = `${migrationId}:${itemId}`;
+    const rollback = this.rollbackActions.get(key);
+    if (!rollback) return false;
+
+    try {
+      await rollback();
+      this.rollbackActions.delete(key);
+      return true;
+    } catch (err) {
+      console.error(
+        `[healing-engine] Rollback failed for ${key}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return false;
     }
   }
 

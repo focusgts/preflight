@@ -1,6 +1,6 @@
 # ADR-051: Code Modernization File Output — Git Branch Integration
 
-## Status: Proposed
+## Status: Accepted
 
 ## Date: 2026-03-31
 

@@ -1,6 +1,6 @@
 # ADR-053: CDN & DNS Cutover Automation
 
-## Status: Proposed
+## Status: Accepted
 
 ## Date: 2026-03-31
 

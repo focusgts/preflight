@@ -1,6 +1,6 @@
 # ADR-054: Self-Healing Execution — Real Remediation
 
-## Status: Proposed
+## Status: Accepted
 
 ## Date: 2026-03-31
 

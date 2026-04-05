@@ -1,6 +1,6 @@
 # ADR-050: Content Transfer Implementation — Sling POST & Package Manager
 
-## Status: Proposed
+## Status: Accepted
 
 ## Date: 2026-03-31
 

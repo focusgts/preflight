@@ -1,6 +1,6 @@
 # ADR-052: Cloud Manager Deployment Integration
 
-## Status: Proposed
+## Status: Accepted
 
 ## Date: 2026-03-31
 

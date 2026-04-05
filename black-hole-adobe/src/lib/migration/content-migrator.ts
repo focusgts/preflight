@@ -6,6 +6,11 @@
  * and post-migration integrity verification.
  */
 import { ContentHealth, MigrationItem, CompatibilityLevel, Severity, ValidationResult, ValidationCheck } from '@/types';
+import {
+  executeBatchTransfer,
+  hasRealCredentials,
+  type AemCredentials,
+} from './aem-content-writer';
 
 export interface ContentNode {
   path: string;
@@ -28,6 +33,13 @@ export interface RedirectMapping { sourcePath: string; targetPath: string; statu
 export interface ContentAnalysisResult { health: ContentHealth; nodesByType: Record<string, number>; largestAssets: ContentNode[]; orphanedContent: ContentNode[]; metadataQuality: MetadataQualityReport; }
 export interface MetadataQualityReport { totalNodes: number; nodesWithTitle: number; nodesWithDescription: number; nodesWithTags: number; nodesWithAltText: number; averageCompleteness: number; issues: Array<{ path: string; missingFields: string[]; severity: Severity }>; }
 export interface MigrationExecutionResult { status: 'completed' | 'partial' | 'failed'; itemsProcessed: number; itemsFailed: number; itemsSkipped: number; errors: Array<{ path: string; error: string }>; duration: number; }
+
+export interface MigrationTargetConfig {
+  sourceUrl: string;
+  targetUrl: string;
+  sourceCredentials: Record<string, unknown> | null;
+  targetCredentials: Record<string, unknown> | null;
+}
 
 const IMMUTABLE_PREFIXES = ['/apps/', '/libs/', '/oak:index/'];
 
@@ -134,19 +146,102 @@ export class ContentMigrator {
       mutablePaths: mutable.map((n) => n.path), immutablePaths: immutable.map((n) => n.path), redirectMappings: redirects };
   }
 
-  /** Orchestrate migration execution across sets with progress tracking. */
-  async executeMigration(plan: MigrationPlan, onProgress?: (id: string, pct: number) => void): Promise<MigrationExecutionResult> {
-    const start = Date.now(); let ok = 0, fail = 0, skip = 0;
+  /**
+   * Orchestrate migration execution across sets with progress tracking.
+   *
+   * When a targetConfig with real credentials is provided, content is
+   * transferred via Sling POST (small batches) or CRX Package Manager
+   * (large batches). Without credentials the method falls back to
+   * simulation mode so the demo experience is preserved.
+   */
+  async executeMigration(
+    plan: MigrationPlan,
+    onProgress?: (id: string, pct: number) => void,
+    targetConfig?: MigrationTargetConfig,
+  ): Promise<MigrationExecutionResult> {
+    const start = Date.now();
+    let ok = 0, fail = 0, skip = 0;
     const errors: Array<{ path: string; error: string }> = [];
-    for (const set of plan.sets) for (let i = 0; i < set.items.length; i++) {
-      const item = set.items[i];
-      try {
-        if (item.compatibilityLevel === CompatibilityLevel.BLOCKER) { item.status = 'skipped'; skip++; continue; }
-        item.status = 'processing'; item.status = 'completed'; item.processedAt = new Date().toISOString(); ok++;
-      } catch (e) { item.status = 'failed'; item.error = e instanceof Error ? e.message : String(e); fail++; errors.push({ path: item.sourcePath, error: item.error }); }
-      onProgress?.(set.id, ((i + 1) / set.items.length) * 100);
+
+    // Determine whether we have real target credentials
+    const useRealTransfer =
+      targetConfig &&
+      targetConfig.sourceUrl &&
+      targetConfig.targetUrl &&
+      hasRealCredentials(targetConfig.targetCredentials);
+
+    if (!useRealTransfer) {
+      console.warn(
+        '[ContentMigrator] No target credentials configured — running in simulation mode',
+      );
     }
-    return { status: fail === 0 ? 'completed' : ok > 0 ? 'partial' : 'failed', itemsProcessed: ok, itemsFailed: fail, itemsSkipped: skip, errors, duration: Date.now() - start };
+
+    for (const set of plan.sets) {
+      if (useRealTransfer) {
+        // Real transfer via AEM Content Writer (ADR-050)
+        const sourceCreds: AemCredentials = {
+          authType: (targetConfig.sourceCredentials?.authType as string) ?? 'basic',
+          accessToken: targetConfig.sourceCredentials?.accessToken as string | undefined,
+          token: targetConfig.sourceCredentials?.token as string | undefined,
+          username: targetConfig.sourceCredentials?.username as string | undefined,
+          password: targetConfig.sourceCredentials?.password as string | undefined,
+        };
+
+        const targetCreds: AemCredentials = {
+          authType: (targetConfig.targetCredentials?.authType as string) ?? 'basic',
+          accessToken: targetConfig.targetCredentials?.accessToken as string | undefined,
+          token: targetConfig.targetCredentials?.token as string | undefined,
+          username: targetConfig.targetCredentials?.username as string | undefined,
+          password: targetConfig.targetCredentials?.password as string | undefined,
+        };
+
+        const result = await executeBatchTransfer(
+          targetConfig.sourceUrl,
+          targetConfig.targetUrl,
+          set.items,
+          { source: sourceCreds, target: targetCreds },
+          (processed, total, current) => {
+            onProgress?.(set.id, (processed / total) * 100);
+          },
+        );
+
+        ok += result.success;
+        fail += result.failed;
+        skip += result.skipped;
+        errors.push(...result.errors);
+      } else {
+        // Simulation mode — mark items as completed without HTTP calls
+        for (let i = 0; i < set.items.length; i++) {
+          const item = set.items[i];
+          try {
+            if (item.compatibilityLevel === CompatibilityLevel.BLOCKER) {
+              item.status = 'skipped';
+              skip++;
+              continue;
+            }
+            item.status = 'processing';
+            item.status = 'completed';
+            item.processedAt = new Date().toISOString();
+            ok++;
+          } catch (e) {
+            item.status = 'failed';
+            item.error = e instanceof Error ? e.message : String(e);
+            fail++;
+            errors.push({ path: item.sourcePath, error: item.error });
+          }
+          onProgress?.(set.id, ((i + 1) / set.items.length) * 100);
+        }
+      }
+    }
+
+    return {
+      status: fail === 0 ? 'completed' : ok > 0 ? 'partial' : 'failed',
+      itemsProcessed: ok,
+      itemsFailed: fail,
+      itemsSkipped: skip,
+      errors,
+      duration: Date.now() - start,
+    };
   }
 
   /** Post-migration content integrity validation. */
