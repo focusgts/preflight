@@ -9,6 +9,9 @@
 | 027-029 | Public Features | Health score, calculator, landing page |
 | 030-038 | Detection & Competitive | AEM scanner, competitive positioning, gap features |
 | 039-044 | Integration & Hardening | Wiring, pipeline execution, portal, production readiness |
+| 045-049 | Content Sync & Security | Content sync wiring, auth hardening, SSRF protection, credentials, rate limits |
+| 050-054 | Execution Infrastructure | Content transfer, code output, Cloud Manager, CDN/DNS cutover, self-healing |
+| 055-058 | Cross-Platform Connectors | WordPress, Sitecore, GA-to-CJA, SFMC-to-Campaign migration engines |
 
 ## Index
 
@@ -58,3 +61,17 @@
 | [042](ADR-042-migration-execution-pipeline.md) | Migration Execution Pipeline | Proposed | Connect transform/execute/validate/metrics routes to real engines and fix Portal Live Migration page |
 | [043](ADR-043-client-portal-real-data.md) | Client Portal & Real Data Integration | Proposed | Wire client portal to real migration data with shareable token-based authentication |
 | [044](ADR-044-production-hardening-demo-polish.md) | Production Hardening & Demo Polish | Proposed | Cross-cutting production readiness: auth config, lead notifications, error handling, empty states |
+| [045](ADR-045-content-sync-page-wiring.md) | Content Sync Page Wiring | Proposed | Wire Content Sync page to real APIs, replacing mock data |
+| [046](ADR-046-public-path-lockdown.md) | Public Path Lockdown & Auth Boundary Hardening | Accepted | Remove sensitive routes from PUBLIC_PATHS, add portal-specific token auth |
+| [047](ADR-047-ssrf-protection.md) | SSRF Protection | Accepted | Validate and restrict outbound requests from connector endpoints |
+| [048](ADR-048-production-credential-security.md) | Production Credential Security | Accepted | Encrypt stored credentials, rotate tokens, secure credential lifecycle |
+| [049](ADR-049-dependency-and-rate-limit-hardening.md) | Dependency & Rate Limit Hardening | Accepted | Rate limiting, dependency audit, input validation hardening |
+| [050](ADR-050-content-transfer-sling-post-package-manager.md) | Content Transfer — Sling POST & Package Manager | Proposed | Real content transfer via Sling POST (incremental) and AEM Package Manager (bulk) |
+| [051](ADR-051-code-modernization-file-output.md) | Code Modernization File Output — Git Branch Integration | Proposed | Write auto-fix results to filesystem via Git branches or ZIP download |
+| [052](ADR-052-cloud-manager-deployment.md) | Cloud Manager Deployment Integration | Proposed | Automated deployment to AEMaaCS via Cloud Manager API |
+| [053](ADR-053-cdn-dns-cutover-automation.md) | CDN & DNS Cutover Automation | Proposed | Automated DNS switching, CDN cache purge, and go-live with rollback support |
+| [054](ADR-054-self-healing-real-remediation.md) | Self-Healing Execution — Real Remediation | Proposed | Real remedy executors that make AEM API calls instead of flipping status flags |
+| [055](ADR-055-wordpress-connector-migration.md) | WordPress Connector & Migration Engine | Proposed | WordPress REST API connector with Gutenberg-to-Core-Components transformer |
+| [056](ADR-056-ga-to-cja-migration.md) | Google Analytics to CJA Migration Engine | Proposed | GA4 configuration extraction and CJA data view/XDM schema generation |
+| [057](ADR-057-sitecore-connector-migration.md) | Sitecore Connector & Migration Engine | Proposed | Sitecore Item API/GraphQL connector with template and rendering transformation |
+| [058](ADR-058-sfmc-to-adobe-campaign-migration.md) | SFMC to Adobe Campaign Migration Engine | Proposed | SFMC REST API connector with AMPscript-to-Campaign personalization conversion |
