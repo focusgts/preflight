@@ -348,23 +348,62 @@ export class AEMConnector extends BaseConnector {
   /** Extract DAM assets from /content/dam. */
   async extractAssets(rootPath: string = '/content/dam'): Promise<AEMAsset[]> {
     this.ensureConnected();
-    return this.paginateRequest<AEMAsset, { entities: Array<Record<string, unknown>>; properties: { 'srn:paging': { next?: string } } }>(
-      {
+
+    // Use QueryBuilder to get every dam:Asset recursively under rootPath.
+    // The /api/assets.json endpoint only lists direct children of a folder
+    // and does not recurse, which missed 98% of assets in sandbox testing.
+    const hits = await this.queryBuilder({
+      'type': 'dam:Asset',
+      'path': rootPath,
+      'p.limit': String(this.batchSize),
+    }, 'Extracting assets');
+
+    const assets: AEMAsset[] = [];
+    const startedAt = Date.now();
+
+    for (let i = 0; i < hits.length; i++) {
+      const path = hits[i]['jcr:path'];
+      if (!path) continue;
+      const asset = await this.fetchAssetNode(path);
+      if (asset) assets.push(asset);
+      this.reportProgress('assets', i + 1, hits.length, `Extracting asset ${path}`, startedAt);
+    }
+
+    return assets;
+  }
+
+  /** Fetch full asset metadata for a single DAM asset path. */
+  private async fetchAssetNode(path: string): Promise<AEMAsset | null> {
+    try {
+      // Use depth=1 so the nested "metadata" subnode is included
+      const response = await this.makeRequest<SlingResourceResponse>({
         method: 'GET',
-        url: this.buildUrl(`/api/assets${rootPath.replace('/content/dam', '')}.json`),
+        url: this.buildUrl(`${path}/jcr:content.1.json`),
         headers: this.getAuthHeaders(),
-        queryParams: { limit: String(this.batchSize) },
-      },
-      (response) => {
-        return (response.entities || []).map((entity) => this.mapAsset(entity));
-      },
-      (response, currentOptions) => {
-        const nextLink = response.properties?.['srn:paging']?.next;
-        if (!nextLink) return null;
-        return { ...currentOptions, url: this.buildUrl(nextLink) };
-      },
-      'Extracting assets',
-    );
+      });
+      const data = response.data;
+      const metadata = (data.metadata || {}) as Record<string, unknown>;
+      return {
+        path,
+        name: path.split('/').pop() || '',
+        mimeType: (metadata['dc:format'] as string) || '',
+        size: (metadata['dam:size'] as number) || (metadata['dam:Size'] as number) || 0,
+        lastModified: (metadata['jcr:lastModified'] as string) || (data['jcr:lastModified'] as string) || null,
+        metadata,
+        renditions: [],
+      };
+    } catch {
+      // Return a minimal stub for assets with missing jcr:content
+      return {
+        path,
+        name: path.split('/').pop() || '',
+        mimeType: '',
+        size: 0,
+        lastModified: null,
+        metadata: { _incomplete: true },
+        renditions: [],
+      };
+    }
   }
 
   /** Extract component definitions from /apps. */

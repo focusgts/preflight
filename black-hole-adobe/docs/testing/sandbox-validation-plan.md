@@ -82,18 +82,21 @@ Before running any test:
 - Pagination works correctly (assets are fetched in batches without loss)
 - Latency under 3 minutes
 
-**Status:** FAIL (2026-04-08) — significant architectural bug found
+**Status:** PASS (2026-04-08, after bug fix)
 
 **Actual result:**
-- 0 assets extracted in 12 seconds
-- No warnings or errors reported
+- 589/589 assets extracted in 292 seconds (~5 min)
+- 482/589 (82%) with mimeType populated
+- 458/589 (78%) with size > 0
+- Remaining assets without mime/size are legitimate — placeholders, renditions, or non-standard metadata structures
+- Zero errors, zero warnings
 
-**Bugs found:**
-3. **Assets extraction uses wrong API and wrong pagination** — two compounding bugs:
-   - (a) `/api/assets.json` lists direct children of a DAM folder (12 items at `/content/dam` root), not all 589 actual asset files recursively. The connector calls `/api/assets.json?limit=100` expecting to get all assets paginated, but it only gets folders.
-   - (b) The pagination reader expects `response.properties['srn:paging'].next` to contain the next URL, but that field does not exist. The next URL is in the top-level `links[]` array with `rel: ["next"]`. Even if fixed, pagination would still only walk the top-level folder siblings, not recurse into asset files.
-   - Fix requires restructuring `extractAssets()` to use QueryBuilder with `type=dam:Asset` (same approach as `extractContent` uses for pages) OR to implement recursive folder walking. QueryBuilder approach is simpler and matches how the inventory count already works.
-   - Deferred — logged in ADR-059 for remediation in the next bug fix sprint
+**Bugs found and fixed:**
+3. **Assets extraction used wrong API and wrong pagination** — two compounding bugs:
+   - (a) `/api/assets.json` lists direct children of a DAM folder (12 items at `/content/dam` root), not all 589 actual asset files recursively.
+   - (b) Pagination reader expected `response.properties['srn:paging'].next` which does not exist; AEMaaCS puts next URL in top-level `links[]` array.
+   - Fix: Rewrote `extractAssets()` to use QueryBuilder with `type=dam:Asset` (same approach as `extractContent`). Added `fetchAssetNode()` private helper that fetches `jcr:content.1.json` (depth=1) so the nested `metadata` subnode containing `dc:format` and `dam:size` is included.
+4. **Asset metadata fetch used depth=0** — initial fix returned 589 assets with names and paths but zero mimeType/size because `jcr:content.json` without depth returns only top-level properties, and asset metadata lives in the `jcr:content/metadata` subnode. Fixed by using `.1.json` (depth=1) suffix.
 
 ---
 
