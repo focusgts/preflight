@@ -319,7 +319,7 @@ export class ContentSyncEngine {
       if (conflictedPaths.has(change.path)) continue;
 
       try {
-        await this.writeToTarget(sync.targetConfig, change);
+        await this.writeToTarget(sync.targetConfig, change, sync.sourceConfig.basePath);
         change.synced = true;
         change.syncedAt = new Date().toISOString();
         applied++;
@@ -337,7 +337,7 @@ export class ContentSyncEngine {
     for (const conflict of conflicts) {
       if (!conflict.resolution) continue;
       try {
-        await this.writeToTarget(sync.targetConfig, conflict.resolution.resolvedChange);
+        await this.writeToTarget(sync.targetConfig, conflict.resolution.resolvedChange, sync.sourceConfig.basePath);
         conflict.resolution.resolvedChange.synced = true;
         conflict.resolution.resolvedChange.syncedAt = new Date().toISOString();
         applied++;
@@ -567,6 +567,7 @@ export class ContentSyncEngine {
   protected async writeToTarget(
     config: SyncTargetConfig,
     change: ContentChange,
+    sourceBasePath?: string,
   ): Promise<void> {
     // Demo mode — no real target configured
     if (!config.url || !hasRealCredentials(config.credentials)) {
@@ -576,23 +577,46 @@ export class ContentSyncEngine {
     const creds = toAemCredentials(config.credentials);
     if (!creds) return;
 
+    // Remap the change path from the source basePath to the target basePath
+    // so a sync like /content/site-a → /content/site-b works correctly.
+    // If sourceBasePath is not provided we assume path == target path.
+    const targetPath =
+      sourceBasePath && config.basePath && change.path.startsWith(sourceBasePath)
+        ? config.basePath + change.path.slice(sourceBasePath.length)
+        : change.path;
+
     const isDelete =
       change.type === ChangeType.PAGE_DELETED ||
       change.type === ChangeType.ASSET_DELETED;
 
     if (isDelete) {
-      const result = await slingDelete(config.url, change.path, creds);
+      const result = await slingDelete(config.url, targetPath, creds);
       if (!result.success) {
-        throw new SyncError(result.error ?? `Failed to delete ${change.path}`);
+        throw new SyncError(result.error ?? `Failed to delete ${targetPath}`);
       }
       return;
     }
 
-    // For created / modified: POST the after-state properties
-    const properties = change.after ?? {};
-    const result = await slingPost(config.url, change.path, properties, creds);
+    // For created / modified: POST the after-state properties.
+    // If the source properties declare a cq:Page primary type without a
+    // jcr:content subnode, inject a minimal one so AEMaaCS accepts the write
+    // (cq:Page requires jcr:content to be created in the same POST).
+    const sourceProps = (change.after ?? {}) as Record<string, unknown>;
+    const properties = { ...sourceProps };
+
+    if (
+      properties['jcr:primaryType'] === 'cq:Page' &&
+      !properties['jcr:content']
+    ) {
+      properties['jcr:content'] = {
+        'jcr:primaryType': 'cq:PageContent',
+        'jcr:title': (sourceProps['jcr:title'] as string) || targetPath.split('/').pop() || '',
+      };
+    }
+
+    const result = await slingPost(config.url, targetPath, properties, creds);
     if (!result.success) {
-      throw new SyncError(result.error ?? `Failed to write ${change.path}`);
+      throw new SyncError(result.error ?? `Failed to write ${targetPath}`);
     }
   }
 }
