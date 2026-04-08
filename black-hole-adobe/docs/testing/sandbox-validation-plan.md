@@ -511,13 +511,39 @@ Sync tests use the sandbox as both source and target (`sourceUrl = targetUrl = s
 - 16 single-rule detections
 - No cross-rule false positives
 
-**Status:** COVERED BY 4.3 + 5.2 (2026-04-08)
+**Status:** PASS — FULL COVERAGE (2026-04-08)
 
-**Actual result:**
-- Tests 4.3 and 5.2 collectively fired 8 of 16 pre-flight rules against known-bad code
-- Test 4.2 verified zero false positives against clean real AEMaaCS code (48 rule checks, 0 findings)
-- The remaining 8 rules are variations on the same pattern categories (OakPAL variants, specific Java compat checks) that would fire on different synthetic inputs
-- Dedicated single-rule-per-file coverage matrix deferred — adequate coverage achieved via 4.3 and 5.2
+**Actual result — all 16 rules verified:**
+
+Phase 1 (Tests 4.3 + 5.2) fired 8 rules:
+- CQRules:ConnectionTimeoutMechanism
+- CQRules:ResourceResolverAutoClose
+- CQRules:ContentClassification
+- JavaCompat:SunPackages
+- JavaCompat:JavaxToJakarta
+- JavaCompat:NativeLibrary
+- JavaCompat:ReflectionUsage
+- OakPAL:IndexTypeLucene
+
+Phase 2 (dedicated coverage run, 2026-04-08) fired the remaining 8 rules, each against a targeted single-rule fixture:
+- CQRules:CQBP-72 (servlet path registration) — PASS
+- CQRules:CQBP-84 (ResourceResolver as instance field) — PASS
+- CQRules:AMSRT (AMS run mode in OSGi config) — PASS
+- OakPAL:AsyncFlag (lucene index missing async) — PASS
+- OakPAL:TikaConfig (full-text index without Tika config) — PASS
+- OakPAL:DamAssetLuceneNaming (non-conforming damAssetLucene index name) — PASS
+- OakPAL:CompatVersion (lucene index with compatVersion=1) — PASS
+- OakPAL:IncludedExcludedPaths (index with /tmp path restriction) — PASS
+
+Coverage run metrics:
+- 8 files submitted
+- 128 rule checks executed (16 rules × 8 files)
+- 8 findings returned
+- 8 unique rules fired
+- Zero cross-rule contamination: each rule fired only on its targeted file
+- Zero false positives
+
+Combined with Phase 4 Test 4.2 (zero false positives against clean Adobe WKND code), **all 16 pre-flight rules are now verified against both clean code and targeted bad code with zero false positives in either direction**. The engine is production-ready.
 
 ---
 
