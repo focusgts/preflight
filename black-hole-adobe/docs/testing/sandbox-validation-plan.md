@@ -113,7 +113,14 @@ Before running any test:
 - Each component has `path`, `resourceType`, `title`, `group`, `dialogPath`
 - At least 10% of components have non-null `dialogPath`
 
-**Status:** Not started
+**Status:** PASS (2026-04-08)
+
+**Actual result:**
+- 240/240 components extracted
+- 240/240 with resourceType
+- 240/240 with title
+- 59/240 (25%) with dialogPath — exceeds 10% target
+- Zero errors, zero warnings
 
 ---
 
@@ -129,7 +136,15 @@ Before running any test:
 - 86 workflows returned
 - Each has `id`, `title`, `steps` array
 
-**Status:** Not started
+**Status:** FAIL (2026-04-08) — bug found
+
+**Actual result:**
+- 0 workflows extracted despite inventory reporting 86
+- Zero warnings
+
+**Bugs found:**
+5. **Workflow extraction path mismatch** — The connect endpoint inventory counts workflows from a path that produces 86 hits, but `extractWorkflows()` queries `type=cq:WorkflowModel` under `/var/workflow/models` which returns 0 hits. On AEMaaCS, workflow models may live under `/conf/global/settings/workflow/models` or `/libs/settings/workflow/models` or the models may not be indexed by `cq:WorkflowModel` type on Cloud Service. Needs investigation to find the correct query.
+   - Deferred — logged for remediation after Phase 1 complete
 
 ---
 
@@ -145,7 +160,13 @@ Before running any test:
 - Non-empty array of index definitions
 - Each has `path`, `name`, `type`, `includedPaths`, `excludedPaths`
 
-**Status:** Not started
+**Status:** PASS (2026-04-08)
+
+**Actual result:**
+- 64 index definitions extracted
+- Types: 49 lucene, 11 property, 2 elasticsearch, 1 counter, 1 reference
+- All with path, name, and type populated
+- Zero errors
 
 ---
 
