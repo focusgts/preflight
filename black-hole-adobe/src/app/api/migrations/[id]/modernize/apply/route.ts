@@ -8,7 +8,7 @@
  */
 
 import { type NextRequest } from 'next/server';
-import { Severity, CompatibilityLevel } from '@/types';
+import { Severity } from '@/types';
 import { success, error } from '@/lib/api/response';
 import { getMigration } from '@/lib/api/store';
 import {
@@ -26,6 +26,11 @@ interface ApplyRequest {
   files?: Array<{ path: string; content: string }>;
   /** When true, include manual-review findings in the ZIP manifest. */
   includeManual?: boolean;
+  /**
+   * When true, compute what WOULD change without mutating any state
+   * and return before/after diffs per finding. Does not write files.
+   */
+  dryRun?: boolean;
 }
 
 /**
@@ -65,20 +70,21 @@ export async function POST(
     }
 
     const format = body.format ?? 'json';
+    const dryRun = body.dryRun === true;
+    const hasUploadedFiles = Array.isArray(body.files) && body.files.length > 0;
 
     // -----------------------------------------------------------------------
-    // Re-run the modernizer to get the canonical finding list.
-    // In a production system these would be cached / stored; for now we
-    // regenerate from the same deterministic inputs.
+    // Finding source selection (ADR-059 Bug 1):
+    //   - If caller provided files, run the modernizer fresh against them
+    //     and use those findings as the canonical working set.
+    //   - Otherwise fall back to the migration's deterministic sample set.
     // -----------------------------------------------------------------------
-    const modernizer = new CodeModernizer();
-    const report = await modernizer.replaceDeprecatedAPIs(body.files ?? []);
-    let findings = report.findings;
-
-    // If no real files were supplied, fall back to the sample set used by
-    // the main modernize endpoint.
-    if (findings.length === 0 && (!body.files || body.files.length === 0)) {
-      // Import the same sample generator used by the parent route
+    let findings: ModernizationFinding[];
+    if (hasUploadedFiles) {
+      const modernizer = new CodeModernizer();
+      const report = await modernizer.replaceDeprecatedAPIs(body.files!);
+      findings = report.findings;
+    } else {
       const { generateFindings } = await import('../findings');
       findings = generateFindings(migration.migrationType);
     }
@@ -100,32 +106,62 @@ export async function POST(
     if (applicable.length === 0) {
       return success({
         applied: 0,
+        dryRun,
         message: 'No auto-fixable findings to apply. Critical findings require manual review.',
         files: [],
       });
     }
 
     const writer = new CodeModernizationWriter();
-    const sourceFiles = body.files && body.files.length > 0
-      ? body.files
+    // ADR-059 Bug 1 & 4: uploaded files are the canonical working set.
+    // Only fall back to sample content when no files were uploaded.
+    const sourceFiles = hasUploadedFiles
+      ? body.files!
       : buildSampleFiles(findings);
+
+    // ----- Dry-run (ADR-059 Bug 5) -----
+    if (dryRun) {
+      const applied = writer.applyFixes(findings, sourceFiles);
+      const changedFiles = applied.filter((f) => f.modifiedContent !== f.originalContent);
+      return success({
+        dryRun: true,
+        wouldApply: changedFiles.length,
+        files: changedFiles.map((f) => ({
+          path: f.path,
+          original: f.originalContent,
+          modified: f.modifiedContent,
+          changes: f.changes,
+          changed: true,
+        })),
+        diffs: applicable.map((f) => ({
+          filePath: f.filePath,
+          title: f.title,
+          severity: f.severity,
+          before: f.beforeCode,
+          after: f.afterCode,
+        })),
+      });
+    }
 
     // ----- JSON format -----
     if (format === 'json') {
       const applied = writer.applyFixes(findings, sourceFiles);
+      const changedCount = applied.filter((f) => f.modifiedContent !== f.originalContent).length;
       return success({
-        applied: applied.length,
+        applied: changedCount,
+        dryRun: false,
         files: applied.map((f) => ({
           path: f.path,
           original: f.originalContent,
           modified: f.modifiedContent,
           changes: f.changes,
+          changed: f.modifiedContent !== f.originalContent,
         })),
       });
     }
 
     // ----- ZIP format -----
-    const { buffer, manifest } = await writer.generateZip(
+    const { buffer, modifiedCount } = await writer.generateZip(
       findings,
       sourceFiles,
       { includeManual: body.includeManual ?? false },
@@ -137,7 +173,7 @@ export async function POST(
         'Content-Type': 'application/zip',
         'Content-Disposition': `attachment; filename="blackhole-modernized-${id}-${Date.now()}.zip"`,
         'Content-Length': String(buffer.length),
-        'X-Files-Modified': String(manifest.length - 1), // exclude CHANGES.md
+        'X-Files-Modified': String(modifiedCount),
       },
     });
   } catch (err) {

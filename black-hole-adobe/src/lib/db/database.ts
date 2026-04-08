@@ -197,6 +197,17 @@ export class DatabaseWrapper {
         id TEXT PRIMARY KEY, migration_id TEXT NOT NULL,
         data TEXT NOT NULL, created_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS migration_audit_log (
+        id TEXT PRIMARY KEY, migration_id TEXT NOT NULL,
+        correlation_id TEXT NOT NULL, timestamp TEXT NOT NULL,
+        operation TEXT NOT NULL, item_path TEXT,
+        status TEXT NOT NULL, duration_ms INTEGER,
+        error_code TEXT, error_category TEXT,
+        error_message TEXT, metadata TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_audit_migration ON migration_audit_log(migration_id);
+      CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON migration_audit_log(timestamp);
+      CREATE INDEX IF NOT EXISTS idx_audit_status ON migration_audit_log(status);
     `;
   }
 

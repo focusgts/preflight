@@ -60,7 +60,7 @@ export async function GET(
 
     const writer = new CodeModernizationWriter();
     const sourceFiles = buildSampleFiles(findings);
-    const { buffer, manifest } = await writer.generateZip(
+    const { buffer, modifiedCount } = await writer.generateZip(
       findings,
       sourceFiles,
       { includeManual: true },
@@ -74,7 +74,7 @@ export async function GET(
         'Content-Type': 'application/zip',
         'Content-Disposition': `attachment; filename="blackhole-modernized-${id}-${timestamp}.zip"`,
         'Content-Length': String(buffer.length),
-        'X-Files-Modified': String(manifest.length - 1),
+        'X-Files-Modified': String(modifiedCount),
       },
     });
   } catch (err) {

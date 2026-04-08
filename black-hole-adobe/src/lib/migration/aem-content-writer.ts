@@ -13,6 +13,11 @@
 import type { MigrationItem } from '@/types';
 import { CompatibilityLevel } from '@/types';
 import { validateScanTarget } from '@/lib/security/url-validator';
+import {
+  logAuditEvent,
+  newCorrelationId,
+} from '@/lib/audit/migration-audit-log';
+import { classifyError } from '@/lib/errors/migration-errors';
 
 // ============================================================
 // Types
@@ -50,7 +55,7 @@ export interface BatchTransferResult {
 // ============================================================
 
 const SLING_POST_TIMEOUT_MS = 10_000;
-const PACKAGE_TIMEOUT_MS = 60_000;
+const PACKAGE_TIMEOUT_MS = 120_000;
 const DEFAULT_BATCH_SIZE = 50;
 const SLING_POST_THRESHOLD = 20;
 const MAX_PACKAGE_PATHS = 200;
@@ -328,7 +333,7 @@ export async function createAndInstallPackage(
       );
 
       if (!createResult.success) {
-        errors.push(`Failed to create package ${chunkPkgName}: ${createResult.message}`);
+        errors.push(`[create] package ${chunkPkgName}: ${createResult.message}`);
         continue;
       }
 
@@ -349,7 +354,7 @@ export async function createAndInstallPackage(
       );
 
       if (!editResult.success) {
-        errors.push(`Failed to set filters on ${chunkPkgName}: ${editResult.message}`);
+        errors.push(`[edit] package ${chunkPkgName}: ${editResult.message}`);
         await cleanupPackage(sourceUrl, credentials.source, groupName, chunkPkgName);
         continue;
       }
@@ -366,21 +371,21 @@ export async function createAndInstallPackage(
       );
 
       if (!buildResult.success) {
-        errors.push(`Failed to build package ${chunkPkgName}: ${buildResult.message}`);
+        errors.push(`[build] package ${chunkPkgName}: ${buildResult.message}`);
         await cleanupPackage(sourceUrl, credentials.source, groupName, chunkPkgName);
         continue;
       }
 
       // Step 4: Download package from source
-      const packageBytes = await downloadPackage(
+      const download = await downloadPackage(
         sourceUrl,
         credentials.source,
         groupName,
         chunkPkgName,
       );
 
-      if (!packageBytes) {
-        errors.push(`Failed to download package ${chunkPkgName}`);
+      if (!download.bytes) {
+        errors.push(`[download] package ${chunkPkgName}: ${download.message}`);
         await cleanupPackage(sourceUrl, credentials.source, groupName, chunkPkgName);
         continue;
       }
@@ -389,12 +394,12 @@ export async function createAndInstallPackage(
       const uploadResult = await uploadPackage(
         targetUrl,
         credentials.target,
-        packageBytes,
+        download.bytes,
         chunkPkgName,
       );
 
       if (!uploadResult.success) {
-        errors.push(`Failed to upload package ${chunkPkgName} to target: ${uploadResult.message}`);
+        errors.push(`[upload] package ${chunkPkgName}: ${uploadResult.message}`);
         await cleanupPackage(sourceUrl, credentials.source, groupName, chunkPkgName);
         continue;
       }
@@ -411,7 +416,7 @@ export async function createAndInstallPackage(
       );
 
       if (!installResult.success) {
-        errors.push(`Failed to install package ${chunkPkgName} on target: ${installResult.message}`);
+        errors.push(`[install] package ${chunkPkgName}: ${installResult.message}`);
       } else {
         totalItems += chunk.length;
       }
@@ -520,13 +525,20 @@ async function packageManagerCommand(
   }
 }
 
+interface PackageDownloadResult {
+  bytes: ArrayBuffer | null;
+  message: string;
+}
+
 async function downloadPackage(
   baseUrl: string,
   credentials: AemCredentials,
   groupName: string,
   packageName: string,
-): Promise<ArrayBuffer | null> {
-  const url = `${normalizeUrl(baseUrl)}/etc/packages/${groupName}/${packageName}-1.0.zip`;
+): Promise<PackageDownloadResult> {
+  // On AEMaaCS, built packages live at /etc/packages/{group}/{name}.zip
+  // (the create command does not set a version suffix).
+  const url = `${normalizeUrl(baseUrl)}/etc/packages/${groupName}/${packageName}.zip`;
   const authHeaders = buildAuthHeaders(credentials);
 
   try {
@@ -534,18 +546,32 @@ async function downloadPackage(
       url,
       {
         method: 'GET',
-        headers: authHeaders,
+        headers: {
+          ...authHeaders,
+          Accept: 'application/zip, application/octet-stream',
+        },
       },
       PACKAGE_TIMEOUT_MS,
     );
 
     if (!response.ok) {
-      return null;
+      const body = await response.text().catch(() => '');
+      return {
+        bytes: null,
+        message: `download HTTP ${response.status}: ${body.slice(0, 200)}`,
+      };
     }
 
-    return await response.arrayBuffer();
-  } catch {
-    return null;
+    const buf = await response.arrayBuffer();
+    if (!buf || buf.byteLength === 0) {
+      return { bytes: null, message: 'download returned empty body' };
+    }
+    return { bytes: buf, message: `OK (${buf.byteLength} bytes)` };
+  } catch (err) {
+    return {
+      bytes: null,
+      message: `download error: ${err instanceof Error ? err.message : String(err)}`,
+    };
   }
 }
 
@@ -555,34 +581,48 @@ async function uploadPackage(
   packageBytes: ArrayBuffer,
   packageName: string,
 ): Promise<PackageCommandResult> {
-  const url = `${normalizeUrl(baseUrl)}/crx/packmgr/service.jsp`;
+  // AEMaaCS upload endpoint expects multipart/form-data with a `file` field.
+  const url = `${normalizeUrl(baseUrl)}/crx/packmgr/service/.json/?cmd=upload`;
   const authHeaders = buildAuthHeaders(credentials);
 
   const blob = new Blob([packageBytes], { type: 'application/zip' });
   const formData = new FormData();
-  formData.append('cmd', 'upload');
+  formData.append('file', blob, `${packageName}.zip`);
+  formData.append('name', packageName);
   formData.append('force', 'true');
-  formData.append('package', blob, `${packageName}-1.0.zip`);
 
   try {
     const response = await fetchWithTimeout(
       url,
       {
         method: 'POST',
-        headers: authHeaders, // No Content-Type — let browser set multipart boundary
+        // Do NOT set Content-Type — fetch generates the multipart boundary.
+        headers: authHeaders,
         body: formData,
       },
       PACKAGE_TIMEOUT_MS,
     );
 
     const text = await response.text();
-    const success = response.status === 200 && (text.includes('code="200"') || text.includes('success'));
 
-    return { success, message: success ? 'OK' : text.slice(0, 300) };
+    // .json endpoint returns JSON: { success: true, msg: "...", path: "..." }
+    try {
+      const json = JSON.parse(text);
+      return {
+        success: json.success === true && response.ok,
+        message: json.msg || (json.success ? 'OK' : `HTTP ${response.status}`),
+      };
+    } catch {
+      const success = response.ok && text.includes('success');
+      return {
+        success,
+        message: success ? 'OK' : `upload HTTP ${response.status}: ${text.slice(0, 200)}`,
+      };
+    }
   } catch (err) {
     return {
       success: false,
-      message: err instanceof Error ? err.message : String(err),
+      message: `upload error: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
 }
@@ -624,7 +664,20 @@ export async function executeBatchTransfer(
   credentials: { source: AemCredentials; target: AemCredentials },
   onProgress?: (processed: number, total: number, current: string) => void,
   batchSize: number = DEFAULT_BATCH_SIZE,
+  migrationId?: string,
 ): Promise<BatchTransferResult> {
+  // ADR-061: structured audit logging for the batch transfer.
+  const correlationId = newCorrelationId('batch');
+  const batchStartedAt = Date.now();
+  const auditMigrationId = migrationId ?? 'unknown';
+  logAuditEvent({
+    migrationId: auditMigrationId,
+    correlationId,
+    operation: 'batch_transfer',
+    itemPath: null,
+    status: 'started',
+    metadata: { totalItems: items.length, batchSize },
+  });
   let success = 0;
   let failed = 0;
   let skipped = 0;
@@ -654,6 +707,7 @@ export async function executeBatchTransfer(
         item.status = 'processing';
         onProgress?.(processed, items.length, item.sourcePath);
 
+        const itemStart = Date.now();
         const result = await slingPost(
           targetUrl,
           item.targetPath ?? item.sourcePath,
@@ -665,8 +719,28 @@ export async function executeBatchTransfer(
           item.status = 'completed';
           item.processedAt = new Date().toISOString();
           success++;
+          logAuditEvent({
+            migrationId: auditMigrationId,
+            correlationId,
+            operation: 'sling_post',
+            itemPath: item.sourcePath,
+            status: 'succeeded',
+            durationMs: Date.now() - itemStart,
+          });
         } else {
           failedItems.push(item);
+          const err = classifyError(new Error(result.error ?? 'Sling POST failed'));
+          logAuditEvent({
+            migrationId: auditMigrationId,
+            correlationId,
+            operation: 'sling_post',
+            itemPath: item.sourcePath,
+            status: 'failed',
+            durationMs: Date.now() - itemStart,
+            errorCode: err.code,
+            errorCategory: err.category,
+            errorMessage: err.message,
+          });
         }
 
         processed++;
@@ -690,6 +764,17 @@ export async function executeBatchTransfer(
           item.error = retryResult.error ?? 'Sling POST failed after retry';
           failed++;
           errors.push({ path: item.sourcePath, error: item.error });
+          const err = classifyError(new Error(item.error));
+          logAuditEvent({
+            migrationId: auditMigrationId,
+            correlationId,
+            operation: 'sling_post_retry',
+            itemPath: item.sourcePath,
+            status: 'failed',
+            errorCode: err.code,
+            errorCategory: err.category,
+            errorMessage: err.message,
+          });
         }
       }
     } else {
@@ -715,6 +800,14 @@ export async function executeBatchTransfer(
           item.processedAt = new Date().toISOString();
           success++;
         }
+        logAuditEvent({
+          migrationId: auditMigrationId,
+          correlationId,
+          operation: 'package_transfer',
+          itemPath: null,
+          status: 'succeeded',
+          metadata: { itemCount: batch.length },
+        });
       } else {
         // Package failed — fall back to individual Sling POSTs
         for (const item of batch) {
@@ -754,6 +847,16 @@ export async function executeBatchTransfer(
       processed += batch.length;
     }
   }
+
+  logAuditEvent({
+    migrationId: auditMigrationId,
+    correlationId,
+    operation: 'batch_transfer',
+    itemPath: null,
+    status: failed > 0 ? 'failed' : 'succeeded',
+    durationMs: Date.now() - batchStartedAt,
+    metadata: { success, failed, skipped, errorCount: errors.length },
+  });
 
   return { success, failed, skipped, errors };
 }

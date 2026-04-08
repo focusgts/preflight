@@ -385,9 +385,11 @@ Sync tests use the sandbox as both source and target (`sourceUrl = targetUrl = s
 - All three strategies produce the documented outcome
 - Manual strategy leaves conflicts in the `pending` state
 
-**Status:** DEFERRED (2026-04-08)
+**Status:** COVERED BY UNIT TESTS (2026-04-05)
 
-**Reason:** Creating a deterministic conflict scenario against a live sandbox requires creating simultaneous writes to the same path on both "source" and "target" with precise timing relative to the polling cycle. This is a race condition that cannot be reliably tested without a dedicated test harness. The conflict detection logic lives in `ChangeDetector` and `ConflictResolver` modules which are unit-tested; the sync engine's conflict dispatch was exercised indirectly in Tests 3.1 and 3.2 (it handled the absence of conflicts correctly). Deferred to a follow-up conflict-specific test with a controlled test harness.
+**Coverage:** `tests/unit/sync/conflict-resolver-live.test.ts` provides a controlled test harness for all three strategies (SOURCE_WINS, TARGET_WINS, MANUAL) across both-modified, delete-vs-modify, and multi-field divergence scenarios. It also includes integration tests that subclass `ContentSyncEngine` (`HarnessSyncEngine`) to stub `fetchSourceItems` / `fetchTargetItems` / `writeToTarget` with in-memory data, allowing `runSyncCycle` to exercise conflict detection and dispatch deterministically without a live AEM instance. 13 tests, all passing.
+
+**Original reason for deferral:** Creating a deterministic conflict scenario against a live sandbox requires simultaneous writes to the same path on both "source" and "target" with precise timing relative to the polling cycle — a race condition unreliable in a live environment. The unit-test harness eliminates the timing dependency by injecting pre-diverged snapshots directly.
 
 ---
 

@@ -34,6 +34,8 @@ export interface AppliedFile {
 export interface ZipResult {
   buffer: Buffer;
   manifest: string[];
+  /** Number of files whose content was actually modified. */
+  modifiedCount: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -63,7 +65,8 @@ export class CodeModernizationWriter {
       fileMap.set(f.path, { original: f.content, current: f.content, changes: [] });
     }
 
-    // Apply each qualifying finding
+    // Apply each qualifying finding (ADR-059 Bug 2).
+    // Multiple findings may affect the same file — apply sequentially.
     for (const finding of findings) {
       if (!this.isApplicable(finding)) continue;
 
@@ -71,7 +74,7 @@ export class CodeModernizationWriter {
       if (!entry) continue;
 
       const before = entry.current;
-      const after = before.replaceAll(finding.beforeCode, finding.afterCode as string);
+      const after = this.applyReplacement(before, finding.beforeCode, finding.afterCode as string);
 
       if (after !== before) {
         entry.current = after;
@@ -79,19 +82,37 @@ export class CodeModernizationWriter {
       }
     }
 
-    // Return only files that were actually modified
+    // Return ALL input files so callers (ZIP generation) can include the
+    // full uploaded set. Only files with recorded changes will show as
+    // modified in the response.
     const results: AppliedFile[] = [];
     for (const [path, entry] of fileMap) {
-      if (entry.changes.length > 0) {
-        results.push({
-          path,
-          originalContent: entry.original,
-          modifiedContent: entry.current,
-          changes: entry.changes,
-        });
-      }
+      results.push({
+        path,
+        originalContent: entry.original,
+        modifiedContent: entry.current,
+        changes: entry.changes,
+      });
     }
     return results;
+  }
+
+  /**
+   * Replace `beforeCode` with `afterCode` inside content. Tries a literal
+   * `replaceAll` first, then falls back to a regex-escaped global replace
+   * so that patterns containing regex metacharacters still match.
+   */
+  private applyReplacement(content: string, beforeCode: string, afterCode: string): string {
+    if (!beforeCode) return content;
+    const literal = content.replaceAll(beforeCode, afterCode);
+    if (literal !== content) return literal;
+    // Regex fallback: escape the beforeCode and run a global replace.
+    const escaped = beforeCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    try {
+      return content.replace(new RegExp(escaped, 'g'), afterCode);
+    } catch {
+      return content;
+    }
   }
 
   /**
@@ -110,7 +131,9 @@ export class CodeModernizationWriter {
     const zip = new JSZip();
     const manifest: string[] = [];
 
-    // Add modified files
+    // ADR-059 Bug 4: include EVERY uploaded file in the ZIP, with
+    // modifications applied where applicable. No placeholder files are
+    // generated — the archive mirrors the customer's input 1:1.
     for (const file of applied) {
       // Strip leading slash so ZIP paths are relative
       const zipPath = file.path.replace(/^\//, '');
@@ -118,13 +141,14 @@ export class CodeModernizationWriter {
       manifest.push(zipPath);
     }
 
-    // Build CHANGES.md
-    const changesContent = this.buildChangesManifest(findings, applied, options?.includeManual ?? false);
+    // CHANGES.md lists only files that were actually modified.
+    const changedFiles = applied.filter((f) => f.modifiedContent !== f.originalContent);
+    const changesContent = this.buildChangesManifest(findings, changedFiles, options?.includeManual ?? false);
     zip.file('CHANGES.md', changesContent);
     manifest.push('CHANGES.md');
 
     const buffer = Buffer.from(await zip.generateAsync({ type: 'uint8array' }));
-    return { buffer, manifest };
+    return { buffer, manifest, modifiedCount: changedFiles.length };
   }
 
   // -------------------------------------------------------------------------

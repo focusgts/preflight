@@ -1,6 +1,20 @@
 # ADR-061: Production-Grade Error Handling & Observability
 
-## Status: Proposed
+## Status: Accepted
+
+## Implementation Notes (2026-04-05)
+
+Partial implementation landed — highest-value pieces only:
+
+- **Error taxonomy** — `src/lib/errors/migration-errors.ts` with `MigrationError` base class plus `NetworkError`, `AuthError`, `RateLimitError`, `ValidationError`, `ContentError`, `FatalError`, and a `classifyError()` helper for pattern-matching raw errors into the taxonomy.
+- **Structured audit logging** — `src/lib/audit/migration-audit-log.ts` persists audit entries to the `migration_audit_log` SQLite table (schema added to both `schema.sql` and the inline fallback in `database.ts`). Falls back to an in-memory ring buffer if SQLite is unavailable. Exposes `logAuditEvent`, `logAuditError`, `queryAuditLog`, `countAuditLog`, and `newCorrelationId`.
+- **Audit query API** — `GET /api/migrations/[id]/audit` with filters for `limit`, `offset`, `status`, `operation`, `severity`, `startDate`, `endDate`, and pagination metadata.
+- **Hook points wired** — `executeBatchTransfer()` in `aem-content-writer.ts` (started / per-item succeeded|failed / retry failed / package transfer / batch summary), `ContentSyncEngine.applyChanges()` in `content-sync-engine.ts` (per-change succeeded|failed), and the assessment route at `POST /api/migrations/[id]/assess` (started / succeeded / failed).
+
+### Deferred
+
+Transaction semantics for batches, mid-migration health checks, auto-pause triggers, and resume capability remain deferred. They require orchestrator changes that do not exist yet and should be sequenced after the orchestrator refactor.
+
 
 ## Date: 2026-04-08
 

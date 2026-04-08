@@ -35,6 +35,11 @@ import {
   type DeterministicScoreInputs,
 } from '@/lib/engine/deterministic-scoring';
 import { effortEstimator } from '@/lib/engine/effort-estimator';
+import {
+  logAuditEvent,
+  logAuditError,
+  newCorrelationId,
+} from '@/lib/audit/migration-audit-log';
 
 type RouteParams = { params: Promise<{ id: string }> };
 
@@ -48,13 +53,27 @@ export async function POST(
     return error('RATE_LIMITED', 'Too many requests. Try again later.', 429, { retryAfter: Math.ceil((resetAt - Date.now()) / 1000) });
   }
 
+  const correlationId = newCorrelationId('assess');
+  const assessStart = Date.now();
+  let assessMigrationId = 'unknown';
+
   try {
     const { id } = await params;
+    assessMigrationId = id;
     const migration = getMigration(id);
 
     if (!migration) {
       return error('NOT_FOUND', `Migration ${id} not found`, 404);
     }
+
+    // ADR-061: audit assessment lifecycle.
+    logAuditEvent({
+      migrationId: id,
+      correlationId,
+      operation: 'assessment',
+      itemPath: null,
+      status: 'started',
+    });
 
     // Only allow assessment from DRAFT status
     if (migration.status !== MigrationStatus.DRAFT) {
@@ -242,9 +261,31 @@ export async function POST(
     });
 
     console.log(`[API] POST /api/migrations/${id}/assess — assessment ${assessment.id} created`);
+    logAuditEvent({
+      migrationId: id,
+      correlationId,
+      operation: 'assessment',
+      itemPath: null,
+      status: 'succeeded',
+      durationMs: Date.now() - assessStart,
+      metadata: {
+        assessmentId: assessment.id,
+        overallScore: assessment.overallScore,
+      },
+    });
     return success({ assessment, effortEstimate }, 201);
   } catch (err) {
     console.error('[API] POST /api/migrations/[id]/assess error:', err);
+    logAuditError(
+      {
+        migrationId: assessMigrationId,
+        correlationId,
+        operation: 'assessment',
+        itemPath: null,
+        durationMs: Date.now() - assessStart,
+      },
+      err,
+    );
     return error('INTERNAL_ERROR', 'Failed to start assessment', 500);
   }
 }

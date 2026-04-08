@@ -52,8 +52,10 @@ const PATH_MAPPINGS: Record<string, string> = {
 
 /** Deprecated AEM APIs and their replacements. */
 const API_RULES: Array<{ pattern: RegExp; replacement: string; desc: string; severity: Severity }> = [
-  { pattern: /SlingRepository\.loginAdministrative\s*\(/g, replacement: 'SlingRepository.loginService(', desc: 'loginAdministrative is removed. Use service users via loginService().', severity: Severity.CRITICAL },
+  { pattern: /SlingRepository\.loginAdministrative\s*\(/g, replacement: 'SlingRepository.loginService(', desc: 'loginAdministrative is removed in AEMaaCS. Use loginService with a configured service user.', severity: Severity.CRITICAL },
+  { pattern: /(?<!SlingRepository\.)\bloginAdministrative\s*\(/g, replacement: 'loginService(', desc: 'loginAdministrative is removed in AEMaaCS. Use loginService with a configured service user.', severity: Severity.CRITICAL },
   { pattern: /ResourceResolverFactory\.getAdministrativeResourceResolver\s*\(/g, replacement: 'ResourceResolverFactory.getServiceResourceResolver(', desc: 'Administrative resource resolvers are forbidden. Use service resource resolvers.', severity: Severity.CRITICAL },
+  { pattern: /(?<!ResourceResolverFactory\.)\bgetAdministrativeResourceResolver\s*\(/g, replacement: 'getServiceResourceResolver(', desc: 'getAdministrativeResourceResolver is removed in AEMaaCS. Use getServiceResourceResolver with a service user mapping.', severity: Severity.HIGH },
   { pattern: /session\.impersonate\s*\(/g, replacement: '/* Use service users instead */', desc: 'Session impersonation is restricted. Use service user mappings.', severity: Severity.HIGH },
   { pattern: /javax\.jcr\.observation\.EventListener/g, replacement: 'org.apache.sling.api.resource.observation.ResourceChangeListener', desc: 'JCR EventListener deprecated. Use Sling ResourceChangeListener.', severity: Severity.MEDIUM },
   { pattern: /com\.day\.cq\.replication\.ReplicationAction/g, replacement: 'com.adobe.granite.replication.api', desc: 'Legacy replication API deprecated. Use Granite Replication API.', severity: Severity.MEDIUM },

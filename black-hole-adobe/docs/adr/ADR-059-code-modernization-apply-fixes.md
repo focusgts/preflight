@@ -1,6 +1,6 @@
 # ADR-059: Code Modernization Apply — Fix File Output Bugs
 
-## Status: Proposed
+## Status: Accepted
 
 ## Date: 2026-04-08
 

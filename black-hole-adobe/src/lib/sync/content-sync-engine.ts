@@ -37,6 +37,11 @@ import {
   hasRealCredentials,
 } from '@/lib/migration/aem-content-writer';
 import { ChangeType } from '@/types/sync';
+import {
+  logAuditEvent,
+  newCorrelationId,
+} from '@/lib/audit/migration-audit-log';
+import { classifyError } from '@/lib/errors/migration-errors';
 
 // ============================================================
 // Types
@@ -314,20 +319,45 @@ export class ContentSyncEngine {
     );
 
     // Apply non-conflicted changes
+    // ADR-061: audit every change applied during the sync cycle.
+    const correlationId = newCorrelationId('sync');
     const batch = changes.slice(0, sync.options.batchSize);
     for (const change of batch) {
       if (conflictedPaths.has(change.path)) continue;
 
+      const start = Date.now();
       try {
         await this.writeToTarget(sync.targetConfig, change, sync.sourceConfig.basePath);
         change.synced = true;
         change.syncedAt = new Date().toISOString();
         applied++;
+        logAuditEvent({
+          migrationId: syncId,
+          correlationId,
+          operation: 'sync_apply_change',
+          itemPath: change.path,
+          status: 'succeeded',
+          durationMs: Date.now() - start,
+          metadata: { changeType: change.type },
+        });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         change.error = msg;
         errors.push(`${change.path}: ${msg}`);
         sync.stats.totalErrors++;
+        const classified = classifyError(err);
+        logAuditEvent({
+          migrationId: syncId,
+          correlationId,
+          operation: 'sync_apply_change',
+          itemPath: change.path,
+          status: 'failed',
+          durationMs: Date.now() - start,
+          errorCode: classified.code,
+          errorCategory: classified.category,
+          errorMessage: classified.message,
+          metadata: { changeType: change.type },
+        });
       }
 
       sync.changeLog.push(change);
