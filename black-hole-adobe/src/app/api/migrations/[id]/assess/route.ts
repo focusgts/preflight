@@ -40,6 +40,11 @@ import {
   logAuditError,
   newCorrelationId,
 } from '@/lib/audit/migration-audit-log';
+import {
+  isAsyncRequest,
+  startPhaseAsync,
+  recordPhaseTransition,
+} from '@/lib/orchestrator/route-helpers';
 
 type RouteParams = { params: Promise<{ id: string }> };
 
@@ -60,6 +65,12 @@ export async function POST(
   try {
     const { id } = await params;
     assessMigrationId = id;
+
+    // ADR-062: async mode — delegate to orchestrator + execution runtime.
+    if (isAsyncRequest(_request)) {
+      return await startPhaseAsync(id, 'assess');
+    }
+
     const migration = getMigration(id);
 
     if (!migration) {
@@ -273,6 +284,14 @@ export async function POST(
         overallScore: assessment.overallScore,
       },
     });
+    // ADR-062: mirror the state change through the orchestrator so the
+    // state machine history + audit trail remain authoritative.
+    await recordPhaseTransition(id, MigrationStatus.ASSESSED, {
+      phase: 'assess',
+      assessmentId: assessment.id,
+      overallScore: assessment.overallScore,
+    });
+
     return success({ assessment, effortEstimate }, 201);
   } catch (err) {
     console.error('[API] POST /api/migrations/[id]/assess error:', err);

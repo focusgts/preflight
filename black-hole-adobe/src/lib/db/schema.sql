@@ -251,3 +251,21 @@ CREATE TABLE IF NOT EXISTS migration_audit_log (
 CREATE INDEX IF NOT EXISTS idx_audit_migration ON migration_audit_log(migration_id);
 CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON migration_audit_log(timestamp);
 CREATE INDEX IF NOT EXISTS idx_audit_status ON migration_audit_log(status);
+
+-- ============================================================
+-- Migration State History (ADR-062)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS migration_state_history (
+  id             TEXT PRIMARY KEY,
+  migration_id   TEXT NOT NULL,
+  from_state     TEXT,
+  to_state       TEXT NOT NULL,
+  trigger_source TEXT NOT NULL,
+  triggered_by   TEXT,
+  timestamp      TEXT NOT NULL,
+  metadata       TEXT  -- JSON or null
+);
+
+CREATE INDEX IF NOT EXISTS idx_state_history_migration ON migration_state_history(migration_id);
+CREATE INDEX IF NOT EXISTS idx_state_history_timestamp ON migration_state_history(timestamp);

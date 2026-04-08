@@ -21,6 +21,11 @@ import { success, error } from '@/lib/api/response';
 import { checkRateLimit, RATE_LIMITS } from '@/lib/api/rate-limiter';
 import { getMigration, updateMigration } from '@/lib/api/store';
 import {
+  isAsyncRequest,
+  startPhaseAsync,
+  recordPhaseTransition,
+} from '@/lib/orchestrator/route-helpers';
+import {
   CodeModernizer,
   type ModernizationFinding,
   type ModernizationReport,
@@ -171,6 +176,12 @@ export async function POST(
 
   try {
     const { id } = await params;
+
+    // ADR-062: async mode — delegate to orchestrator + execution runtime.
+    if (isAsyncRequest(_request)) {
+      return await startPhaseAsync(id, 'transform');
+    }
+
     const migration = getMigration(id);
 
     if (!migration) {
@@ -295,6 +306,12 @@ export async function POST(
       status: MigrationStatus.TRANSFORMING,
       phases: [...existingPhases, codeModPhase, contentPhase],
       progress: 20,
+    });
+
+    // ADR-062: mirror the state change through the orchestrator.
+    await recordPhaseTransition(id, MigrationStatus.TRANSFORMING, {
+      phase: 'transform',
+      transformItems: transformItems.length,
     });
 
     console.log(

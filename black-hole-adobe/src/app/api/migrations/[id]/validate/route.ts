@@ -11,6 +11,11 @@ import { MigrationStatus, PhaseType, Severity } from '@/types';
 import type { MigrationPhase, MigrationProject, ValidationCheck } from '@/types';
 import { success, error } from '@/lib/api/response';
 import { getMigration, updateMigration } from '@/lib/api/store';
+import {
+  isAsyncRequest,
+  startPhaseAsync,
+  recordPhaseTransition,
+} from '@/lib/orchestrator/route-helpers';
 import { progressEventBus } from '@/lib/progress/event-bus';
 import { deterministicScore, hashString } from '@/lib/engine/deterministic-scoring';
 import { runRegression } from '@/lib/validation/regression-engine';
@@ -467,6 +472,12 @@ export async function POST(
 ) {
   try {
     const { id } = await params;
+
+    // ADR-062: async mode — delegate to orchestrator + execution runtime.
+    if (isAsyncRequest(_request)) {
+      return await startPhaseAsync(id, 'validate');
+    }
+
     const migration = getMigration(id);
 
     if (!migration) {
@@ -575,6 +586,13 @@ export async function POST(
         suiteStatus,
         suitesRun: suites.length,
       },
+    });
+
+    // ADR-062: mirror the state change through the orchestrator.
+    await recordPhaseTransition(id, newStatus, {
+      phase: 'validate',
+      overallScore,
+      suiteStatus,
     });
 
     console.log(

@@ -13,6 +13,11 @@ import type { MigrationPhase, MigrationItem, MigrationProject } from '@/types';
 import { success, error } from '@/lib/api/response';
 import { checkRateLimit, RATE_LIMITS } from '@/lib/api/rate-limiter';
 import { getMigration, updateMigration } from '@/lib/api/store';
+import {
+  isAsyncRequest,
+  startPhaseAsync,
+  recordPhaseTransition,
+} from '@/lib/orchestrator/route-helpers';
 import { progressEventBus } from '@/lib/progress/event-bus';
 import { hashString } from '@/lib/engine/deterministic-scoring';
 
@@ -189,6 +194,12 @@ export async function POST(
 
   try {
     const { id } = await params;
+
+    // ADR-062: async mode — delegate to orchestrator + execution runtime.
+    if (isAsyncRequest(_request)) {
+      return await startPhaseAsync(id, 'execute');
+    }
+
     const migration = getMigration(id);
 
     if (!migration) {
@@ -271,6 +282,12 @@ export async function POST(
         itemsTotal: cutoverItems.length,
         itemsProcessed: 0,
       },
+    });
+
+    // ADR-062: mirror the state change through the orchestrator.
+    await recordPhaseTransition(id, MigrationStatus.EXECUTING, {
+      phase: 'execute',
+      cutoverItems: cutoverItems.length,
     });
 
     console.log(

@@ -1,6 +1,6 @@
 # ADR-062: Migration Orchestrator State Machine
 
-## Status: Proposed
+## Status: Accepted
 
 ## Date: 2026-04-08
 
