@@ -51,11 +51,19 @@ Before running any test:
 - No 500 errors in the response
 - Latency under 60 seconds for the full pull
 
-**Status:** Not started
+**Status:** PASS (2026-04-08)
 
-**Actual result:** (filled in when test runs)
+**Actual result:**
+- Connect: 16 seconds wall clock, environment detected as cloud-service
+- Inventory: pages=31, assets=589, components=240, workflows=86 (all match expected)
+- Full extraction: 49 seconds, 31/31 pages extracted (after bug fixes)
+- 30 pages with full jcr:content data, 1 stub for `/content/output` (no jcr:content subnode)
+- 4 pages marked published, 27 draft
+- Zero errors, zero warnings
 
-**Bugs found:** (filled in when test runs)
+**Bugs found:**
+1. **AEMaaCS QueryBuilder field name mismatch** — AEMaaCS returns the path field as `path`, not `jcr:path` as the connector assumed. All four extraction methods (content, components, workflows, indirectly assets) read `hit['jcr:path']` which was `undefined`. Result: extract returned 0 items for every QueryBuilder-based extraction. Fixed by normalizing hits inside `queryBuilder()` helper to always expose a `jcr:path` field regardless of which key AEM returns.
+2. **Silent page drops on missing jcr:content** — Folder-style container pages (like `/content/output`) appear in `cq:Page` queries but have no `jcr:content` subnode. `fetchContentNode()` silently returned null and the page was dropped from results. Result: 30 pages returned instead of 31. Fixed by returning a minimal stub with `_incomplete: true` marker so the page is still counted and flagged.
 
 ---
 
@@ -74,7 +82,18 @@ Before running any test:
 - Pagination works correctly (assets are fetched in batches without loss)
 - Latency under 3 minutes
 
-**Status:** Not started
+**Status:** FAIL (2026-04-08) — significant architectural bug found
+
+**Actual result:**
+- 0 assets extracted in 12 seconds
+- No warnings or errors reported
+
+**Bugs found:**
+3. **Assets extraction uses wrong API and wrong pagination** — two compounding bugs:
+   - (a) `/api/assets.json` lists direct children of a DAM folder (12 items at `/content/dam` root), not all 589 actual asset files recursively. The connector calls `/api/assets.json?limit=100` expecting to get all assets paginated, but it only gets folders.
+   - (b) The pagination reader expects `response.properties['srn:paging'].next` to contain the next URL, but that field does not exist. The next URL is in the top-level `links[]` array with `rel: ["next"]`. Even if fixed, pagination would still only walk the top-level folder siblings, not recurse into asset files.
+   - Fix requires restructuring `extractAssets()` to use QueryBuilder with `type=dam:Asset` (same approach as `extractContent` uses for pages) OR to implement recursive folder walking. QueryBuilder approach is simpler and matches how the inventory count already works.
+   - Deferred — logged in ADR-059 for remediation in the next bug fix sprint
 
 ---
 

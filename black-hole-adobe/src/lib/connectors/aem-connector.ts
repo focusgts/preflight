@@ -530,7 +530,14 @@ export class AEMConnector extends BaseConnector {
 
       const data = response.data;
       if (!data.hits || data.hits.length === 0) break;
-      allHits.push(...data.hits);
+      // AEMaaCS QueryBuilder returns the path under "path" instead of "jcr:path"
+      // on some endpoints. Normalize so downstream code can always read jcr:path.
+      const normalized = data.hits.map((h) => {
+        const rawPath = (h as Record<string, unknown>)['jcr:path']
+          ?? (h as Record<string, unknown>)['path'];
+        return { ...h, 'jcr:path': rawPath as string };
+      });
+      allHits.push(...normalized);
 
       this.reportProgress(phase, allHits.length, data.total || allHits.length,
         `${phase}: ${allHits.length} / ${data.total || '?'}`, startedAt);
@@ -562,7 +569,20 @@ export class AEMConnector extends BaseConnector {
         properties: data,
       };
     } catch {
-      return null;
+      // Some cq:Page nodes (folder-like containers, legacy nodes) have no
+      // jcr:content subnode. Return a minimal stub so we still account for
+      // the page in the extraction rather than silently dropping it.
+      return {
+        path,
+        title: path.split('/').pop() || '',
+        resourceType: '',
+        template: null,
+        lastModified: null,
+        lastModifiedBy: null,
+        published: false,
+        children: [],
+        properties: { _incomplete: true },
+      };
     }
   }
 
