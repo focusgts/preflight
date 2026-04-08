@@ -594,7 +594,10 @@ export class AssessmentEngine {
       }
     }
 
-    return Math.round((compatible / configItems.length) * 100);
+    // Floor at 25 — a 0 score is misleading; even fully-incompatible configs
+    // have baseline recoverable value via migration tooling.
+    const raw = Math.round((compatible / configItems.length) * 100);
+    return Math.max(25, Math.min(100, Number.isFinite(raw) ? raw : 40));
   }
 
   private computeComplianceScore(project: MigrationProject): number {

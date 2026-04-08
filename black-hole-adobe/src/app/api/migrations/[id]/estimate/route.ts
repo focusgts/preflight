@@ -33,7 +33,7 @@ export async function GET(
     const assessment = getAssessmentByMigration(id);
 
     if (assessment) {
-      const estimate = effortEstimator.estimate(assessment, id);
+      const estimate = effortEstimator.estimate(assessment, id, {}, migration);
       console.log(`[API] GET /api/migrations/${id}/estimate — detailed estimate (${assessment.findings.length} findings)`);
       return success(estimate);
     }
@@ -89,7 +89,7 @@ export async function POST(
     const assessment = getAssessmentByMigration(id);
 
     if (assessment) {
-      const estimate = effortEstimator.estimate(assessment, id, options);
+      const estimate = effortEstimator.estimate(assessment, id, options, migration);
       console.log(`[API] POST /api/migrations/${id}/estimate — customized detailed estimate`);
       return success(estimate);
     }

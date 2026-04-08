@@ -433,7 +433,7 @@ export class DatabaseWrapper {
     // Store findings
     if (result.findings.length > 0) {
       const insertFinding = this.db.prepare(
-        `INSERT INTO assessment_findings (
+        `INSERT OR REPLACE INTO assessment_findings (
           id, assessment_id, category, sub_category, severity,
           compatibility_level, title, description, affected_path,
           remediation_guide, auto_fix_available, estimated_hours,
@@ -446,9 +446,11 @@ export class DatabaseWrapper {
         )`,
       );
 
+      let findingIdx = 0;
       for (const f of result.findings) {
         insertFinding.run({
-          id: f.id,
+          // Always prefix with assessment ID to guarantee uniqueness across runs
+          id: `${result.id}-${findingIdx++}-${f.id}`.slice(0, 100),
           assessmentId: result.id,
           category: f.category,
           subCategory: f.subCategory,

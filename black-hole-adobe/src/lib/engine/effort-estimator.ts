@@ -27,6 +27,8 @@ export interface EffortRange {
 export interface CostRange {
   min: number;
   max: number;
+  minPremium: number;
+  maxPremium: number;
   blendedRate: number;
   premiumRate: number;
 }
@@ -55,12 +57,12 @@ export interface CategoryBreakdown {
 }
 
 export interface IndustryComparison {
-  industryAvgWeeks: EffortRange;
-  industryAvgCost: EffortRange;
+  industryAvgWeeks: number;
+  industryAvgCost: number;
   blackHoleWeeks: EffortRange;
   blackHoleCost: CostRange;
-  weeksSaved: EffortRange;
-  costSaved: EffortRange;
+  weeksSaved: number;
+  costSaved: number;
   savingsPercent: number;
 }
 
@@ -78,6 +80,7 @@ export interface EffortEstimate {
   industryComparison: IndustryComparison;
   testingOverhead: EffortRange;
   complexityMultiplier: number;
+  dataSource: 'external-scan' | 'assessment' | 'full-codebase' | 'metadata-only';
   generatedAt: string;
 }
 
@@ -99,7 +102,7 @@ export interface EstimateOptions {
   /** Number of sites/tenants */
   siteCount?: number;
   /** Data confidence source */
-  dataSource?: 'external-scan' | 'assessment' | 'full-codebase';
+  dataSource?: 'external-scan' | 'assessment' | 'full-codebase' | 'metadata-only';
 }
 
 // ============================================================
@@ -234,10 +237,15 @@ function getMultiSiteMultiplier(siteCount: number): number {
 // ============================================================
 
 function computeConfidence(
-  dataSource: 'external-scan' | 'assessment' | 'full-codebase',
+  dataSource: 'external-scan' | 'assessment' | 'full-codebase' | 'metadata-only',
   findingCount: number,
 ): { confidence: number; level: 'preliminary' | 'detailed' | 'high-confidence' } {
   switch (dataSource) {
+    case 'metadata-only':
+      return {
+        confidence: Math.min(50, 35 + Math.min(findingCount, 15)),
+        level: 'preliminary',
+      };
     case 'external-scan':
       // 40-60% confidence depending on finding count
       return {
@@ -275,6 +283,7 @@ export class EffortEstimator {
     assessment: AssessmentResult,
     migrationProjectId: string,
     options: EstimateOptions = {},
+    migration?: MigrationProject,
   ): EffortEstimate {
     const blendedRate = options.blendedRate ?? this.defaultBlendedRate;
     const premiumRate = options.premiumRate ?? this.defaultPremiumRate;
@@ -303,8 +312,25 @@ export class EffortEstimator {
     const testingMin = adjustedMinDays * this.testingOverheadPercent.min;
     const testingMax = adjustedMaxDays * this.testingOverheadPercent.max;
 
-    const totalMinDays = adjustedMinDays + testingMin;
-    const totalMaxDays = adjustedMaxDays + testingMax;
+    let totalMinDays = adjustedMinDays + testingMin;
+    let totalMaxDays = adjustedMaxDays + testingMax;
+
+    // Baseline floor: when findings are sparse (e.g., deterministic metadata-only
+    // generation produced only a handful), anchor to canonical industry baselines
+    // for the migration type so buyers see realistic numbers. We merge with the
+    // findings-based estimate by taking the max of each bound.
+    const migrationType = migration?.migrationType ?? '';
+    const productCount = Math.max(1, migration?.productsInScope?.length ?? 1);
+    const baseline = this.getBaselineWeeks(migrationType);
+    const baselineApplies = migrationType.toLowerCase().includes('aem');
+    const productScale = 1 + (productCount - 1) * 0.15;
+    const baselineMinDays = baseline.minWeeks * 5 * productScale;
+    const baselineMaxDays = baseline.maxWeeks * 5 * productScale;
+    const usedBaseline = baselineApplies && totalMinDays < baselineMinDays;
+    if (usedBaseline) {
+      totalMinDays = Math.max(totalMinDays, baselineMinDays);
+      totalMaxDays = Math.max(totalMaxDays, baselineMaxDays);
+    }
 
     // Convert to weeks (5 working days per week)
     const totalDevWeeks: EffortRange = {
@@ -319,9 +345,13 @@ export class EffortEstimator {
 
     // Step 6: Calculate cost range
     const hoursPerDay = 8;
+    const minDevHours = totalMinDays * hoursPerDay;
+    const maxDevHours = totalMaxDays * hoursPerDay;
     const costRange: CostRange = {
-      min: Math.round(totalMinDays * hoursPerDay * blendedRate),
-      max: Math.round(totalMaxDays * hoursPerDay * premiumRate),
+      min: Math.round(minDevHours * blendedRate),
+      max: Math.round(maxDevHours * blendedRate),
+      minPremium: Math.round(minDevHours * premiumRate),
+      maxPremium: Math.round(maxDevHours * premiumRate),
       blendedRate,
       premiumRate,
     };
@@ -335,7 +365,23 @@ export class EffortEstimator {
     };
 
     // Step 8: Top effort drivers
-    const topEffortDrivers = this.computeTopDrivers(breakdown, totalMinDays + totalMaxDays);
+    let topEffortDrivers = this.computeTopDrivers(breakdown, totalMinDays + totalMaxDays);
+
+    // If baseline was applied (sparse findings), distribute the baseline-backed
+    // total across canonical categories so drivers are non-zero and meaningful.
+    if (usedBaseline) {
+      const distribution = this.getCanonicalDistribution(migrationType);
+      topEffortDrivers = distribution.map(d => ({
+        category: d.category,
+        label: d.label,
+        instanceCount: 1,
+        effortDays: {
+          min: Math.round(totalMinDays * d.percent),
+          max: Math.round(totalMaxDays * d.percent),
+        },
+        percentOfTotal: Math.round(d.percent * 100),
+      }));
+    }
 
     // Step 9: Industry comparison
     const industryComparison = this.computeIndustryComparison(totalDevWeeks, costRange);
@@ -363,6 +409,7 @@ export class EffortEstimator {
         max: Math.round(testingMax),
       },
       complexityMultiplier: Math.round(complexityMultiplier * 100) / 100,
+      dataSource,
       generatedAt: new Date().toISOString(),
     };
   }
@@ -384,13 +431,24 @@ export class EffortEstimator {
     const integrationCount = options.integrationCount ?? (migration.sourceEnvironment.metadata?.integrationCount as number) ?? 5;
     const siteCount = options.siteCount ?? (migration.sourceEnvironment.metadata?.siteCount as number) ?? 1;
 
+    // Baseline floors per migration type — calibrated against real-world enterprise engagements.
+    // Without real findings, a tiny synthetic estimate would mislead buyers, so we anchor to
+    // known industry ranges and scale by productsInScope as a proxy for engagement breadth.
+    const migrationType = migration.migrationType ?? '';
+    const productCount = Math.max(1, migration.productsInScope?.length ?? 1);
+    const baseline = this.getBaselineWeeks(migrationType);
+    const productScale = 1 + (productCount - 1) * 0.15; // each extra product adds ~15%
+
+    const baselineMinDays = baseline.minWeeks * 5 * productScale;
+    const baselineMaxDays = baseline.maxWeeks * 5 * productScale;
+
     // Build synthetic findings based on component count
     // Average 1.5 findings per component for AEM migrations
     const syntheticFindingCount = Math.max(5, Math.round(componentCount * 1.5));
 
-    // Base effort: 2-4 dev-days per synthetic finding (mid-range)
-    const baseMinDays = syntheticFindingCount * 1.5;
-    const baseMaxDays = syntheticFindingCount * 3.5;
+    // Base effort: 2-4 dev-days per synthetic finding (mid-range), floored to baseline
+    const baseMinDays = Math.max(baselineMinDays, syntheticFindingCount * 1.5);
+    const baseMaxDays = Math.max(baselineMaxDays, syntheticFindingCount * 3.5);
 
     // Apply complexity multipliers
     const osgiBundleCount = options.osgiBundleCount ?? Math.round(componentCount * 0.3);
@@ -425,9 +483,13 @@ export class EffortEstimator {
     };
 
     const hoursPerDay = 8;
+    const minDevHours = totalMin * hoursPerDay;
+    const maxDevHours = totalMax * hoursPerDay;
     const costRange: CostRange = {
-      min: Math.round(totalMin * hoursPerDay * blendedRate),
-      max: Math.round(totalMax * hoursPerDay * premiumRate),
+      min: Math.round(minDevHours * blendedRate),
+      max: Math.round(maxDevHours * blendedRate),
+      minPremium: Math.round(minDevHours * premiumRate),
+      maxPremium: Math.round(maxDevHours * premiumRate),
       blendedRate,
       premiumRate,
     };
@@ -439,33 +501,20 @@ export class EffortEstimator {
       sixPersonTeam: Math.ceil(avgDays / (6 * 5)),
     };
 
-    // Preliminary breakdown (coarse categories)
-    const breakdown: CategoryBreakdown[] = [
-      {
-        category: 'code-modernization',
-        label: 'Code Modernization',
-        instanceCount: componentCount,
-        effortDaysPerInstance: { min: 1, max: 3 },
-        totalEffortDays: { min: Math.round(componentCount * 1 * complexityMultiplier), max: Math.round(componentCount * 3 * complexityMultiplier) },
-        findings: [],
+    // Preliminary breakdown — distribute total across canonical categories for the migration type.
+    // This guarantees non-zero drivers even when no real findings are available.
+    const distribution = this.getCanonicalDistribution(migrationType);
+    const breakdown: CategoryBreakdown[] = distribution.map(d => ({
+      category: d.category,
+      label: d.label,
+      instanceCount: 1,
+      effortDaysPerInstance: { min: 0, max: 0 },
+      totalEffortDays: {
+        min: Math.round(totalMin * d.percent),
+        max: Math.round(totalMax * d.percent),
       },
-      {
-        category: 'content-migration',
-        label: 'Content Migration',
-        instanceCount: 1,
-        effortDaysPerInstance: { min: 5, max: 15 },
-        totalEffortDays: { min: Math.round(5 * contentMult), max: Math.round(15 * contentMult) },
-        findings: [],
-      },
-      {
-        category: 'integration-reconnection',
-        label: 'Integration Reconnection',
-        instanceCount: integrationCount,
-        effortDaysPerInstance: { min: 2, max: 8 },
-        totalEffortDays: { min: Math.round(integrationCount * 2 * integrationMult), max: Math.round(integrationCount * 8 * integrationMult) },
-        findings: [],
-      },
-    ];
+      findings: [],
+    }));
 
     const topEffortDrivers: EffortDriver[] = breakdown
       .map(b => ({
@@ -501,11 +550,63 @@ export class EffortEstimator {
       industryComparison,
       testingOverhead: { min: Math.round(testMin), max: Math.round(testMax) },
       complexityMultiplier: Math.round(complexityMultiplier * 100) / 100,
+      dataSource: options.dataSource ?? 'metadata-only',
       generatedAt: new Date().toISOString(),
     };
   }
 
   // ── Private helpers ──────────────────────────────────────────
+
+  /**
+   * Baseline dev-week ranges for migration types when no real findings exist.
+   * Calibrated against industry SI engagement data.
+   */
+  private getBaselineWeeks(migrationType: string): { minWeeks: number; maxWeeks: number } {
+    const t = migrationType.toLowerCase();
+    if (t.includes('aem') && (t.includes('cloud') || t.includes('onprem'))) {
+      return { minWeeks: 20, maxWeeks: 52 };
+    }
+    if (t.includes('wordpress') && t.includes('aem')) {
+      return { minWeeks: 8, maxWeeks: 20 };
+    }
+    if (t.includes('ga') && t.includes('cja')) {
+      return { minWeeks: 4, maxWeeks: 10 };
+    }
+    // Default conservative baseline for any other migration type
+    return { minWeeks: 6, maxWeeks: 16 };
+  }
+
+  /**
+   * Canonical effort distribution by migration type. Percentages sum to 1.
+   */
+  private getCanonicalDistribution(migrationType: string): Array<{ category: string; label: string; percent: number }> {
+    const t = migrationType.toLowerCase();
+    if (t.includes('aem')) {
+      return [
+        { category: 'code-modernization',      label: 'Code Modernization',       percent: 0.30 },
+        { category: 'content-migration',       label: 'Content Migration',        percent: 0.25 },
+        { category: 'testing',                 label: 'Testing & QA',             percent: 0.20 },
+        { category: 'integration-reconnection',label: 'Integration Reconnection', percent: 0.15 },
+        { category: 'deployment',              label: 'Deployment & Cutover',     percent: 0.10 },
+      ];
+    }
+    if (t.includes('ga') && t.includes('cja')) {
+      return [
+        { category: 'schema-mapping',     label: 'Schema Mapping',         percent: 0.35 },
+        { category: 'data-view-setup',    label: 'Data View Setup',        percent: 0.25 },
+        { category: 'report-rebuild',     label: 'Report Rebuild',         percent: 0.20 },
+        { category: 'testing',            label: 'Testing & QA',           percent: 0.15 },
+        { category: 'deployment',         label: 'Deployment & Cutover',   percent: 0.05 },
+      ];
+    }
+    return [
+      { category: 'code-modernization',      label: 'Code Modernization',       percent: 0.35 },
+      { category: 'content-migration',       label: 'Content Migration',        percent: 0.25 },
+      { category: 'integration-reconnection',label: 'Integration Reconnection', percent: 0.20 },
+      { category: 'testing',                 label: 'Testing & QA',             percent: 0.15 },
+      { category: 'deployment',              label: 'Deployment & Cutover',     percent: 0.05 },
+    ];
+  }
 
   private inferDataSource(
     assessment: AssessmentResult,
@@ -628,25 +729,18 @@ export class EffortEstimator {
     costRange: CostRange,
   ): IndustryComparison {
     // Industry averages for enterprise AEM migration (ADR-032):
-    // 26-52 dev-weeks, $500K-$2M with traditional SI
-    const industryAvgWeeks: EffortRange = { min: 26, max: 52 };
-    const industryAvgCost: EffortRange = { min: 500_000, max: 2_000_000 };
+    // 26-52 dev-weeks, $500K-$2M with traditional SI. Use midpoints for scalars.
+    const industryAvgWeeks = 39; // midpoint of 26-52
+    const industryAvgCost = 1_250_000; // midpoint of $500K-$2M
 
-    const weeksSaved: EffortRange = {
-      min: Math.max(0, industryAvgWeeks.min - totalDevWeeks.max),
-      max: Math.max(0, industryAvgWeeks.max - totalDevWeeks.min),
-    };
-
-    const avgIndustryCost = (industryAvgCost.min + industryAvgCost.max) / 2;
+    const blackHoleAvgWeeks = (totalDevWeeks.min + totalDevWeeks.max) / 2;
     const avgBlackHoleCost = (costRange.min + costRange.max) / 2;
 
-    const costSaved: EffortRange = {
-      min: Math.max(0, industryAvgCost.min - costRange.max),
-      max: Math.max(0, industryAvgCost.max - costRange.min),
-    };
+    const weeksSaved = Math.max(0, Math.round(industryAvgWeeks - blackHoleAvgWeeks));
+    const costSaved = Math.max(0, Math.round(industryAvgCost - avgBlackHoleCost));
 
-    const savingsPercent = avgIndustryCost > 0
-      ? Math.round(((avgIndustryCost - avgBlackHoleCost) / avgIndustryCost) * 100)
+    const savingsPercent = industryAvgCost > 0
+      ? Math.round(((industryAvgCost - avgBlackHoleCost) / industryAvgCost) * 100)
       : 0;
 
     return {

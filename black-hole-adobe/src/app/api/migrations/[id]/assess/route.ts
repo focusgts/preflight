@@ -211,10 +211,11 @@ export async function POST(
     createAssessment(assessment);
 
     // Generate effort estimate from the assessment (ADR-032)
-    const effortEstimate = effortEstimator.estimate(assessment, id);
+    const effortEstimate = effortEstimator.estimate(assessment, id, {}, migration);
 
     // Derive risk score from overall assessment score
-    const riskScore = Math.round((1 - assessment.overallScore / 100) * 100) / 100;
+    // Risk score expressed on a 0-100 scale (higher = riskier)
+    const riskScore = Math.max(1, Math.round(100 - assessment.overallScore));
 
     // Build assessment phase record
     const assessPhase: MigrationPhase = {

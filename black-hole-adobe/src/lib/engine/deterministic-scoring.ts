@@ -1156,22 +1156,27 @@ export function generateDeterministicFindings(
   const seed = `${inputs.orgName}:${inputs.sourcePlatform}:${inputs.sourceVersion}`;
   const findings: AssessmentFinding[] = [];
 
+  let findingIndex = 0;
   for (const patternKey of profile.findingPatterns) {
     const templates = FINDING_TEMPLATES[patternKey];
     if (!templates) continue;
 
-    for (const tpl of templates) {
+    for (let tplIdx = 0; tplIdx < templates.length; tplIdx++) {
+      const tpl = templates[tplIdx]!;
       // Scale estimated hours based on component/page count
       const componentMultiplier = inputs.componentCount
         ? Math.max(1, Math.ceil(inputs.componentCount / 50))
         : 1;
       const estimatedHours = tpl.estimatedHoursBase * componentMultiplier;
 
-      // Use deterministic ID based on seed + pattern
-      const findingHash = hashString(`${seed}:${patternKey}:${tpl.title}`);
+      // Deterministic ID includes pattern, template index, and global index
+      // to avoid collisions when different templates hash to the same 24-bit prefix.
+      const findingHash = hashString(
+        `${seed}:${patternKey}:${tplIdx}:${tpl.title}:${findingIndex}`,
+      );
 
       findings.push({
-        id: `f-${findingHash.toString(16).slice(0, 6)}`,
+        id: `f-${findingIndex.toString(16)}-${findingHash.toString(16).slice(0, 8)}`,
         category: tpl.category,
         subCategory: tpl.subCategory,
         severity: tpl.severity,
@@ -1184,6 +1189,7 @@ export function generateDeterministicFindings(
         estimatedHours,
         bpaPatternCode: tpl.bpaPatternCode,
       });
+      findingIndex++;
     }
   }
 

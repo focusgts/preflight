@@ -309,7 +309,7 @@ export function EffortEstimate({ migrationId, className }: EffortEstimateProps) 
           label="vs. Industry Avg"
           value={`${comparison.savingsPercent}% less`}
           subtext={comparison.savingsPercent > 0
-            ? `Save ${formatCurrency(comparison.costSaved.min)}-${formatCurrency(comparison.costSaved.max)}`
+            ? `Save ${formatCurrency(comparison.costSaved)}`
             : 'Competitive with industry average'
           }
           index={3}
@@ -394,10 +394,10 @@ export function EffortEstimate({ migrationId, className }: EffortEstimateProps) 
               Traditional SI
             </div>
             <div className="text-lg font-semibold text-slate-300 font-mono">
-              {formatRange(comparison.industryAvgWeeks)} wks
+              {comparison.industryAvgWeeks} wks
             </div>
             <div className="text-sm text-slate-500 mt-1">
-              {formatCurrency(comparison.industryAvgCost.min)} - {formatCurrency(comparison.industryAvgCost.max)}
+              {formatCurrency(comparison.industryAvgCost)}
             </div>
           </motion.div>
 
@@ -433,7 +433,7 @@ export function EffortEstimate({ migrationId, className }: EffortEstimateProps) 
               {comparison.savingsPercent}% less
             </div>
             <div className="text-sm text-slate-400 mt-1">
-              {formatRange(comparison.weeksSaved)} weeks faster
+              {comparison.weeksSaved} weeks faster
             </div>
           </motion.div>
         </div>
