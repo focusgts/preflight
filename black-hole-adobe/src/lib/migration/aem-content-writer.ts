@@ -701,10 +701,18 @@ export async function executeBatchTransfer(
       } else {
         // Package failed — fall back to individual Sling POSTs
         for (const item of batch) {
+          // cq:Page nodes require a jcr:content child in the same POST
+          // on AEMaaCS, otherwise the create fails with a constraint error.
           const fallbackResult = await slingPost(
             targetUrl,
             item.targetPath ?? item.sourcePath,
-            { 'jcr:primaryType': 'cq:Page' },
+            {
+              'jcr:primaryType': 'cq:Page',
+              'jcr:content': {
+                'jcr:primaryType': 'cq:PageContent',
+                'jcr:title': item.name || item.sourcePath.split('/').pop() || '',
+              },
+            },
             credentials.target,
           );
 

@@ -190,7 +190,22 @@ These tests exercise `src/lib/migration/aem-content-writer.ts` against the sandb
 - Delete returns 200
 - Subsequent read returns 404
 
-**Status:** Not started
+**Status:** PASS (2026-04-08)
+
+**Actual result:**
+- Pre-check: 404 (clean start)
+- Create via Sling POST: HTTP 201 Created
+- Verify exists: HTTP 200, jcr:createdBy=dfox@focusgts.com
+- Delete: HTTP 200
+- Verify deleted: HTTP 404
+- Parent cleanup: HTTP 200
+
+This is the first successful content write from Black Hole to a live AEMaaCS instance. The cq:Page was created, persisted to the JCR repository with correct audit metadata, and cleanly deleted. Zero side effects on other content.
+
+**Bugs found and fixed:**
+6. **Batch writer fallback missing required jcr:content child** — When `executeBatchTransfer()` falls back to individual Sling POSTs after a package failure, it was calling `slingPost` with just `{ 'jcr:primaryType': 'cq:Page' }` — no `jcr:content` child. On AEMaaCS, cq:Page nodes require their jcr:content child to be created in the same POST or the write fails with HTTP 500 due to a JCR constraint violation. This would have failed every fallback during a real migration. Fixed by always including a `jcr:content: { jcr:primaryType: 'cq:PageContent', jcr:title: ... }` child in the fallback payload.
+
+**Note for future demos:** The `/api/testing/sling-write` endpoint was created for Phase 2 testing. It is gated behind dashboard auth and should be removed or feature-flagged before production deployment.
 
 ---
 
