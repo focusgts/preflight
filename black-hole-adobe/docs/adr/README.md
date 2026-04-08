@@ -12,6 +12,7 @@
 | 045-049 | Content Sync & Security | Content sync wiring, auth hardening, SSRF protection, credentials, rate limits |
 | 050-054 | Execution Infrastructure | Content transfer, code output, Cloud Manager, CDN/DNS cutover, self-healing |
 | 055-058 | Cross-Platform Connectors | WordPress, Sitecore, GA-to-CJA, SFMC-to-Campaign migration engines |
+| 059-063 | Production Readiness | Code apply bug fixes, real-world validation, error handling, orchestrator, pilot protocol |
 
 ## Index
 
@@ -75,3 +76,8 @@
 | [056](ADR-056-ga-to-cja-migration.md) | Google Analytics to CJA Migration Engine | Proposed | GA4 configuration extraction and CJA data view/XDM schema generation |
 | [057](ADR-057-sitecore-connector-migration.md) | Sitecore Connector & Migration Engine | Proposed | Sitecore Item API/GraphQL connector with template and rendering transformation |
 | [058](ADR-058-sfmc-to-adobe-campaign-migration.md) | SFMC to Adobe Campaign Migration Engine | Proposed | SFMC REST API connector with AMPscript-to-Campaign personalization conversion |
+| [059](ADR-059-code-modernization-apply-fixes.md) | Code Modernization Apply — Fix File Output Bugs | Proposed | Fix the modernize/apply endpoint to actually write modified files and detect missing API patterns |
+| [060](ADR-060-real-world-sandbox-validation.md) | Real-World Sandbox Validation Suite | Proposed | 6-phase test suite validating every execution engine against the live Focus GTS sandbox |
+| [061](ADR-061-production-error-handling.md) | Production-Grade Error Handling & Observability | Proposed | Typed error taxonomy, batch transactions, audit logging, health checks, auto-pause and resume |
+| [062](ADR-062-migration-orchestrator-state-machine.md) | Migration Orchestrator State Machine | Proposed | Central orchestrator with state machine, background execution, parallel phases, and resume capability |
+| [063](ADR-063-production-pilot-protocol.md) | Production Pilot Protocol | Proposed | 3-pilot program (internal, friendly customer, paid pilot) before selling migration execution |
