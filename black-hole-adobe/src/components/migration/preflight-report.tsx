@@ -32,7 +32,7 @@ import type {
 
 // ── Types ────────────────────────────────────────────────────────────────
 
-type ComponentState = 'loading' | 'no-report' | 'running' | 'ready' | 'error';
+type ComponentState = 'loading' | 'no-report' | 'running' | 'ready' | 'error' | 'migration-not-found';
 
 interface PreFlightReportProps {
   migrationId: string;
@@ -356,6 +356,13 @@ export function PreFlightReport({ migrationId }: PreFlightReportProps) {
         setState('ready');
       } else if (res.status === 404 && body.error?.code === 'NO_REPORT') {
         setState('no-report');
+      } else if (
+        res.status === 404 &&
+        (body.error?.code === 'NOT_FOUND' ||
+          body.error?.message?.toLowerCase().includes('migration') &&
+          body.error?.message?.toLowerCase().includes('not found'))
+      ) {
+        setState('migration-not-found');
       } else {
         setErrorMsg(body.error?.message ?? 'Unknown error');
         setState('error');
@@ -467,6 +474,48 @@ export function PreFlightReport({ migrationId }: PreFlightReportProps) {
             <p className="mt-1 text-xs text-slate-500">
               Checking SonarQube rules, OakPAL indexes, and Java compatibility
             </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Migration not found ────────────────────────────────────────────────
+  if (state === 'migration-not-found') {
+    return (
+      <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
+        <div className="flex items-center gap-2 mb-6">
+          <ShieldAlert className="h-5 w-5 text-amber-400" />
+          <h2 className="text-lg font-semibold text-white">
+            Cloud Manager Pre-Flight
+          </h2>
+        </div>
+        <div className="flex flex-col items-center gap-4 py-8 text-center max-w-md mx-auto">
+          <div className="rounded-full bg-amber-500/10 p-3">
+            <AlertTriangle className="h-6 w-6 text-amber-400" />
+          </div>
+          <div>
+            <p className="text-sm font-medium text-amber-300">
+              That migration no longer exists
+            </p>
+            <p className="mt-1 text-xs text-slate-400">
+              The migration ID <span className="font-mono text-slate-300">{migrationId}</span> was not found.
+              It may have been deleted, or the link you followed is out of date.
+            </p>
+          </div>
+          <div className="flex flex-col sm:flex-row gap-2 w-full">
+            <a
+              href="/migrations"
+              className="flex-1 rounded-lg border border-slate-700 bg-slate-800 px-4 py-2 text-sm text-slate-200 hover:bg-slate-700 transition-colors text-center"
+            >
+              Back to migrations
+            </a>
+            <a
+              href="/migrations/new/code"
+              className="flex-1 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-4 py-2 text-sm text-cyan-300 hover:bg-cyan-500/20 transition-colors text-center"
+            >
+              Run standalone check
+            </a>
           </div>
         </div>
       </div>
