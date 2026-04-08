@@ -476,15 +476,26 @@ export class AEMConnector extends BaseConnector {
     const workflows: AEMWorkflow[] = [];
     for (const hit of hits) {
       const path = hit['jcr:path'];
+      if (!path) continue;
       try {
+        // AEMaaCS disables .infinity.json for security. Use .1.json which
+        // returns the node + one level of children (enough for workflow metadata).
+        // Step details are not available via this endpoint on Cloud Service.
         const response = await this.makeRequest<SlingResourceResponse>({
           method: 'GET',
-          url: this.buildUrl(`${path}.infinity.json`),
+          url: this.buildUrl(`${path}.1.json`),
           headers: this.getAuthHeaders(),
         });
         workflows.push(this.mapWorkflow(path, response.data));
       } catch {
-        // Skip inaccessible workflows
+        // Fall back to a minimal stub so the workflow is still counted
+        workflows.push({
+          id: path,
+          title: path.split('/').pop() || '',
+          model: path,
+          steps: [],
+          isEnabled: true,
+        });
       }
     }
     return workflows;
