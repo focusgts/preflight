@@ -221,7 +221,15 @@ This is the first successful content write from Black Hole to a live AEMaaCS ins
 - Tree walk returns the 5 pages in correct order
 - Parent delete removes children recursively
 
-**Status:** Not started
+**Status:** PASS (2026-04-08)
+
+**Actual result:**
+- 5/5 pages created with 201 response each
+- Intermediate paths auto-created by Sling POST (did not need to create the `section-a` folder first)
+- Tree walk via `.2.json` returned all 5 children with correct titles and `cq:Page` primary type
+- Recursive delete of parent section removed all 5 child pages in one operation
+- Verification confirmed deletion (404)
+- Zero bugs found
 
 ---
 
@@ -239,7 +247,18 @@ This is the first successful content write from Black Hole to a live AEMaaCS ins
 - At least 2 renditions exist (original + web rendition)
 - Delete succeeds
 
-**Status:** Not started
+**Status:** PARTIAL PASS (2026-04-08) — endpoint fixed, full E2E deferred
+
+**Actual result:**
+- Package Manager endpoint discovered and verified accessible on AEMaaCS
+- `/crx/packmgr/list.jsp` confirmed AEMaaCS exposes Package Manager
+- `/crx/packmgr/service/exec.json?cmd=create` successfully created a test package returning clean JSON: `{"success":true,"msg":"Package created","path":"/etc/packages/black-hole/blackhole-test-pkg.zip"}`
+- Full end-to-end package flow (create → edit filters → build → download → upload → install) not yet tested against live AEMaaCS
+
+**Bugs found and fixed:**
+7. **Package Manager endpoint wrong on AEMaaCS** — The connector was calling `/crx/packmgr/service.jsp` which on AEMaaCS returns help text (not the expected XML status response) when called with parameter-based commands. The correct endpoint is `/crx/packmgr/service/exec.json` which returns clean JSON responses. Also, the parameter name is `packageName` (not `name`) and `groupName` (not `group`). Fixed by updating `packageManagerCommand()` to use the JSON endpoint with correct parameter names and JSON response parsing.
+
+**Deferred:** Full end-to-end binary upload/download testing requires a larger time investment (multi-minute operations, binary response handling for package download, multipart upload for install). Logged for a follow-up dedicated Package Manager testing session. The critical path (create command endpoint + JSON response handling) is fixed and verified.
 
 ---
 
@@ -258,7 +277,16 @@ This is the first successful content write from Black Hole to a live AEMaaCS ins
 - No items in `failed` state
 - Progress callback fires for each item
 
-**Status:** Not started
+**Status:** PASS (2026-04-08)
+
+**Actual result:**
+- 10/10 items created successfully (100%)
+- Wall clock: 4 seconds
+- Throughput: 2.5 items/second
+- Zero failures
+- All 10 verified present in the target with correct titles
+- Extrapolation: a 5,000-page enterprise site would take ~33 minutes of wall clock time for content tree writes at this rate
+- Zero bugs found
 
 ---
 
@@ -275,7 +303,16 @@ This is the first successful content write from Black Hole to a live AEMaaCS ins
 - No orphan nodes on target
 - Error logged to audit log (if ADR-061 is implemented)
 
-**Status:** Not started
+**Status:** PASS (2026-04-08)
+
+**Actual result:**
+- Batch of 10 items including one with intentionally invalid JCR characters (square brackets in path)
+- 9 items succeeded with 201
+- 1 bad item failed with HTTP 409 (Conflict — invalid JCR path syntax)
+- Batch continued after the failure with no cascading damage
+- Tree walk verified exactly 9 children present, bad item absent
+- No orphan nodes on the target
+- Zero bugs found
 
 ---
 

@@ -451,21 +451,36 @@ async function packageManagerCommand(
   credentials: AemCredentials,
   params: PackageCommandParams,
 ): Promise<PackageCommandResult> {
-  const url = `${normalizeUrl(baseUrl)}/crx/packmgr/service.jsp`;
+  // AEMaaCS exposes Package Manager commands via the JSON exec endpoint.
+  // The older service.jsp endpoint only returns help text when called
+  // with parameter-based commands on Cloud Service.
   const authHeaders = buildAuthHeaders(credentials);
 
+  // Build query string for the exec command
+  const queryParams = new URLSearchParams();
+  queryParams.set('cmd', params.cmd);
+
+  // For edit/build/install, the command acts on an existing package path
   const formParams = new URLSearchParams();
-  formParams.set('cmd', params.cmd);
-  formParams.set('name', params.packageName);
-  formParams.set('group', params.groupName);
 
   if (params.cmd === 'create') {
-    formParams.set('version', '1.0');
+    // Create uses packageName + groupName in the body
+    formParams.set('packageName', params.packageName);
+    formParams.set('groupName', params.groupName);
+  } else {
+    // Other commands target the package by path in the URL
+    // /crx/packmgr/service/exec.json/etc/packages/{group}/{name}.zip?cmd=X
+    formParams.set('packageName', params.packageName);
+    formParams.set('groupName', params.groupName);
   }
 
   if (params.filter) {
     formParams.set('filter', params.filter);
   }
+
+  const url = params.cmd === 'create'
+    ? `${normalizeUrl(baseUrl)}/crx/packmgr/service/exec.json?${queryParams.toString()}`
+    : `${normalizeUrl(baseUrl)}/crx/packmgr/service/exec.json/etc/packages/${params.groupName}/${params.packageName}.zip?${queryParams.toString()}`;
 
   try {
     const response = await fetchWithTimeout(
@@ -483,18 +498,20 @@ async function packageManagerCommand(
 
     const text = await response.text();
 
-    // Package manager returns XML with success="true|false"
-    const success =
-      response.status === 200 &&
-      (text.includes('status="200"') ||
-        text.includes('code="200"') ||
-        text.includes('<status code="200">') ||
-        text.includes('success'));
-
-    return {
-      success,
-      message: success ? 'OK' : text.slice(0, 300),
-    };
+    // exec.json returns {"success":true,"msg":"...","path":"..."} on success
+    try {
+      const json = JSON.parse(text);
+      return {
+        success: json.success === true,
+        message: json.msg || (json.success ? 'OK' : 'Unknown error'),
+      };
+    } catch {
+      // Fallback to text parsing for non-JSON responses
+      return {
+        success: response.status === 200 && text.includes('success'),
+        message: text.slice(0, 300),
+      };
+    }
   } catch (err) {
     return {
       success: false,
