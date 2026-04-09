@@ -253,6 +253,47 @@ CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON migration_audit_log(timestamp)
 CREATE INDEX IF NOT EXISTS idx_audit_status ON migration_audit_log(status);
 
 -- ============================================================
+-- Public Pre-Flight Leads (ADR-064)
+-- ============================================================
+-- Separate from the main `leads` table because public pre-flight
+-- lead capture is email-only (no name/company required).
+
+CREATE TABLE IF NOT EXISTS preflight_leads (
+  id          TEXT PRIMARY KEY,
+  email       TEXT NOT NULL,
+  source      TEXT NOT NULL DEFAULT 'preflight-public',
+  ip          TEXT,
+  user_agent  TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_preflight_leads_email
+  ON preflight_leads(email);
+CREATE INDEX IF NOT EXISTS idx_preflight_leads_created_at
+  ON preflight_leads(created_at DESC);
+
+-- ============================================================
+-- Analytics Events (ADR-064)
+-- ============================================================
+-- Lightweight, privacy-friendly analytics for the public pre-flight
+-- funnel. No PII beyond an optional IP; properties are opaque JSON.
+
+CREATE TABLE IF NOT EXISTS analytics_events (
+  id          TEXT PRIMARY KEY,
+  event       TEXT NOT NULL,
+  path        TEXT,
+  properties  TEXT NOT NULL DEFAULT '{}',  -- JSON
+  ip          TEXT,
+  user_agent  TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_analytics_events_event
+  ON analytics_events(event);
+CREATE INDEX IF NOT EXISTS idx_analytics_events_created_at
+  ON analytics_events(created_at DESC);
+
+-- ============================================================
 -- Migration State History (ADR-062)
 -- ============================================================
 

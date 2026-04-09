@@ -26,6 +26,11 @@ const PUBLIC_PATHS = [
   '/calculator',
   '/score',
   '/assessment',
+  // ADR-064: Public pre-flight page + engine endpoint
+  '/preflight',
+  '/api/preflight',
+  '/api/leads/preflight',
+  '/api/analytics',
 ];
 
 function isPublicPath(pathname: string): boolean {

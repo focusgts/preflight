@@ -35,6 +35,8 @@ export interface RateLimitStore {
 export const RATE_LIMITS = {
   /** Public scanner endpoints — 10 requests per hour. */
   publicScanner: { windowMs: 3_600_000, maxRequests: 10 } satisfies RateLimitConfig,
+  /** Public pre-flight endpoint (ADR-064) — 20 requests per IP per hour. */
+  publicPreflight: { windowMs: 3_600_000, maxRequests: 20 } satisfies RateLimitConfig,
   /** Authenticated read endpoints — 100 requests per minute. */
   authenticatedRead: { windowMs: 60_000, maxRequests: 100 } satisfies RateLimitConfig,
   /** Authenticated write endpoints — 30 requests per minute. */
