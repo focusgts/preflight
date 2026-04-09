@@ -1,0 +1,15 @@
+name: Pre-Flight
+on: [pull_request]
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./packages/preflight-action
+        with:
+          fail-on: critical
+          scan: changed
+          comment: true
+          annotations: true

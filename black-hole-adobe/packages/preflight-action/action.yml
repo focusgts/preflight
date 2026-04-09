@@ -1,0 +1,52 @@
+name: 'Black Hole Pre-Flight'
+description: 'Check AEM code against Cloud Manager quality gates on every pull request'
+author: 'Focus GTS'
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  fail-on:
+    description: 'Minimum severity that fails the check (blocker, critical, major, minor, none)'
+    required: false
+    default: 'critical'
+  scan:
+    description: 'Scan mode: "changed" (PR diff only) or "all" (full repo)'
+    required: false
+    default: 'changed'
+  config-file:
+    description: 'Path to .preflightrc.json config file'
+    required: false
+    default: '.preflightrc.json'
+  comment:
+    description: 'Post a PR comment with findings'
+    required: false
+    default: 'true'
+  annotations:
+    description: 'Emit GitHub Checks inline annotations'
+    required: false
+    default: 'true'
+  sarif-upload:
+    description: 'Upload SARIF to GitHub Code Scanning (generates the file; use github/codeql-action/upload-sarif@v3 in a subsequent step to upload)'
+    required: false
+    default: 'false'
+  token:
+    description: 'GitHub token for API access (defaults to github.token)'
+    required: false
+    default: '${{ github.token }}'
+
+outputs:
+  total:
+    description: 'Total finding count'
+  blocker:
+    description: 'Blocker finding count'
+  critical:
+    description: 'Critical finding count'
+  major:
+    description: 'Major finding count'
+  sarif-path:
+    description: 'Path to generated SARIF file (only set when sarif-upload is true)'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

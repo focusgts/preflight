@@ -1,0 +1,113 @@
+{
+  "name": "blackhole-preflight",
+  "displayName": "Black Hole Pre-Flight for AEM",
+  "description": "Check AEM code against Cloud Manager quality gates as you type",
+  "version": "0.1.0",
+  "publisher": "blackhole",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters"
+  ],
+  "activationEvents": [
+    "onLanguage:java",
+    "workspaceContains:**/jcr_root/**",
+    "workspaceContains:.preflightrc.json"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "preflight.runWorkspace",
+        "title": "Pre-Flight: Run on Workspace"
+      },
+      {
+        "command": "preflight.runFile",
+        "title": "Pre-Flight: Run on Current File"
+      },
+      {
+        "command": "preflight.explainRule",
+        "title": "Pre-Flight: Explain Rule..."
+      },
+      {
+        "command": "preflight.openDashboard",
+        "title": "Pre-Flight: Open Dashboard"
+      }
+    ],
+    "configuration": {
+      "title": "Black Hole Pre-Flight",
+      "properties": {
+        "preflight.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable pre-flight diagnostics"
+        },
+        "preflight.runOnType": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run diagnostics as you type (debounced)"
+        },
+        "preflight.runOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run diagnostics on file save"
+        },
+        "preflight.severityThreshold": {
+          "type": "string",
+          "default": "info",
+          "enum": [
+            "blocker",
+            "critical",
+            "major",
+            "minor",
+            "info"
+          ],
+          "description": "Minimum severity to display"
+        },
+        "preflight.rules": {
+          "type": "object",
+          "default": {},
+          "description": "Rule overrides (e.g. {\"CQBP-84\": \"off\"})"
+        }
+      }
+    },
+    "languages": [
+      {
+        "id": "xml",
+        "extensions": [
+          ".xml",
+          ".content.xml"
+        ]
+      },
+      {
+        "id": "java",
+        "extensions": [
+          ".java"
+        ]
+      },
+      {
+        "id": "json",
+        "extensions": [
+          ".cfg.json"
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node",
+    "watch": "npm run build -- --watch",
+    "test": "vitest run",
+    "package": "npx @vscode/vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "@blackhole/preflight-engine": "*"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.4.0",
+    "vitest": "^3.0.0"
+  }
+}
