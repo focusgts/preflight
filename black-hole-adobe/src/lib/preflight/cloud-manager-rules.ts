@@ -1,9 +1,10 @@
 /**
  * Cloud Manager Pre-Flight Simulation Engine (ADR-036)
  *
- * Validates code against Cloud Manager quality gate rules that BPA misses.
- * Covers SonarQube custom rules, OakPAL index validation, and Java runtime
- * compatibility checks for AEM as a Cloud Service deployments.
+ * Re-export shim: the actual engine lives in @blackhole/preflight-engine.
+ * This file keeps all existing web-app imports working unchanged.
+ *
+ * See packages/preflight-engine/ for the source of truth.
  */
 
 // ============================================================
@@ -220,7 +221,6 @@ const sonarQubeRules: RuleDefinition[] = [
       // Detect ResourceResolver stored as instance field (lifecycle anti-pattern)
       const fieldResolver = /(?:private|protected)\s+ResourceResolver\s+\w+\s*;/;
       // Detect resolver passed across method boundaries without close
-      const resolverParam = /public\s+\w+\s+\w+\s*\([^)]*ResourceResolver\s+\w+[^)]*\)/;
       const classHasActivate = /@Activate|@PostConstruct/;
 
       if (fieldResolver.test(content) && classHasActivate.test(content)) {
@@ -273,7 +273,6 @@ const sonarQubeRules: RuleDefinition[] = [
       if (!isJavaFile(filePath) && !isContentFile(filePath)) return findings;
 
       // Direct /libs references are forbidden — must use overlays via /apps
-      const libsRefPattern = /["'`]\/libs\/[^"'`]+["'`]/g;
       const matchLines = findAllLineNumbers(content, /["'`]\/libs\/[^"'`]+["'`]/);
 
       if (matchLines.length > 0) {
@@ -419,7 +418,6 @@ const oakpalRules: RuleDefinition[] = [
       const findings: PreFlightFinding[] = [];
       if (!isIndexDefinition(filePath, content)) return findings;
 
-      // Check if this is a full-text index (has analyzers or evaluatePathRestrictions with full-text)
       const isFullText = /evaluatePathRestrictions\s*=\s*["']\{Boolean\}true["']/i.test(content) ||
         /analyzed\s*=\s*["']true["']/i.test(content) ||
         /nodeScopeIndex\s*=\s*["']true["']/i.test(content);
@@ -451,7 +449,6 @@ const oakpalRules: RuleDefinition[] = [
       const findings: PreFlightFinding[] = [];
       if (!isIndexDefinition(filePath, content)) return findings;
 
-      // Custom damAssetLucene index must follow naming convention: damAssetLucene-{number}-custom-{number}
       const isDamIndex = /damAssetLucene/i.test(filePath) || /damAssetLucene/i.test(content);
       if (!isDamIndex) return findings;
 
@@ -643,7 +640,7 @@ const javaCompatRules: RuleDefinition[] = [
       const reflectionPatterns = [
         { pattern: /\.setAccessible\s*\(\s*true\s*\)/g, desc: 'setAccessible(true)' },
         { pattern: /\.getDeclaredField\s*\([^)]+\)[\s\S]{0,100}\.setAccessible/g, desc: 'reflective field access' },
-        { pattern: /\.getDeclaredMethod\s*\([^)]+\)[\s\S]{0,100}\.invoke/g, desc: 'reflective method invocation' },
+        { pattern: /\.getDeclaredMethod\s*\([^)]+\)[\s\S]{0,200}\.invoke/g, desc: 'reflective method invocation' },
         { pattern: /Class\.forName\s*\([^)]*\)[\s\S]{0,200}\.getDeclaredConstructor/g, desc: 'reflective constructor access' },
       ];
 

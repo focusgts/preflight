@@ -1,0 +1,32 @@
+{
+  "name": "@blackhole/preflight",
+  "version": "0.1.0",
+  "description": "Cloud Manager pre-flight CLI for AEM as a Cloud Service",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "preflight": "./bin/preflight.js",
+    "blackhole-preflight": "./bin/preflight.js"
+  },
+  "files": ["dist", "bin"],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@blackhole/preflight-engine": "*",
+    "commander": "^12.1.0",
+    "chalk": "^4.1.2",
+    "glob": "^11.0.0",
+    "ignore": "^7.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "vitest": "^4.1.0",
+    "@types/node": "^20.0.0"
+  }
+}

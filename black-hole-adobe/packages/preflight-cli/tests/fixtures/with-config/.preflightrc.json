@@ -1,0 +1,9 @@
+{
+  "include": ["**/*.java"],
+  "exclude": ["**/generated/**"],
+  "failOn": "critical",
+  "rules": {
+    "CQBP-72": "off"
+  },
+  "mode": "local"
+}
